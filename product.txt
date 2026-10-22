@@ -1,0 +1,1025 @@
+# Project: AgentOps AI — Production-Minded Agent Engineering Platform
+
+> Revision 2 (2026-10-21). Changes from revision 1:
+> - Schedule compressed from 7 days to 5 days: Wed 2026-10-21 -> Sun 2026-10-25 (see Section 18).
+> - LLM and embeddings run on free local Ollama models (see Section 23). No paid provider required.
+> - A web UI is now in scope, built only after the backend is complete and tested (see Section 24).
+> - The agent gets sandboxed workspace access (read/write files + allowlisted commands) inside ONE
+>   configured directory, with human approval for writes (see Section 9.1). This replaces the
+>   revision-1 rule "no shell access" with "no UNRESTRICTED shell access".
+> - After every milestone a Recorder agent documents the implementation and generates interview
+>   questions and answers (see Section 22).
+> - Langfuse is used via Langfuse Cloud (free tier) or disabled; self-hosting Langfuse v3 needs
+>   ClickHouse + Redis + MinIO, which does not fit alongside an 8B local model in 16 GB RAM.
+
+## 1. Mission
+
+Build a complete, runnable Agentic AI system in 5 days: backend first, then UI.
+
+The project must teach and demonstrate:
+
+1. Harness engineering
+2. Agent loop engineering
+3. Graph engineering
+4. LLM fundamentals and structured outputs
+5. RAG and hybrid retrieval
+6. Tool calling and tool execution
+7. LangChain and LangGraph
+8. Observability using Langfuse and an optional LangSmith integration
+9. Custom evaluation and regression testing
+10. Cost and latency optimization
+11. Quality, data, and retrieval drift monitoring
+12. Security, reliability, testing, and deployment
+
+13. Sandboxed workspace (filesystem + terminal) tooling with human-in-the-loop approval
+
+Build the backend first and expose everything through REST APIs, OpenAPI documentation, automated tests, a CLI, and structured logs. Only after the backend passes its tests, build the web UI (Section 24) as a pure client of those same APIs; the UI must not contain business logic the API lacks.
+
+Work in small, verifiable milestones. Implement actual working code, not just architecture documents or placeholder functions. Run tests after every major milestone, fix failures, and maintain a working README.
+
+## 2. Product to Build
+
+Build an intelligent research and knowledge agent called AgentOps AI.
+
+Users can upload technical documents, ingest their contents, ask questions, retrieve evidence, execute approved tools, and receive answers with source citations.
+
+Example request:
+
+"Compare these two architecture documents, identify conflicting requirements, calculate the migration impact, verify your claims against the sources, and return an implementation plan."
+
+The backend should be able to:
+
+- Ingest and index documents.
+- Retrieve relevant passages with metadata and source references.
+- Decide whether a question needs retrieval, tools, or both.
+- Execute tools through a controlled agent loop.
+- Orchestrate multi-step workflows through a graph.
+- Validate answers and citations.
+- Record traces, token usage, cost, latency, and failures.
+- Run evaluation datasets and detect regressions.
+- Compare model and retrieval configurations.
+- Enforce execution budgets, timeouts, and tool permissions.
+- Expose operational and evaluation metrics through APIs.
+
+## 3. Technology Stack
+
+Use Python 3.12+ (3.13 is installed locally), uv for dependency management, FastAPI, Pydantic, SQLAlchemy 2.x, Alembic, PostgreSQL, pgvector, pytest, Docker Compose, and GitHub Actions.
+
+AI and orchestration:
+- Ollama (local, free) as the default provider, behind a configurable LLM adapter so a hosted
+  provider can be swapped in later without touching agent code. See Section 23 for models.
+- A deterministic fake LLM provider for unit tests and CI (CI has no GPU and no Ollama).
+- LangChain for model, embedding, and retriever integrations where useful.
+- LangGraph for stateful workflow orchestration.
+- A separate custom agent loop to learn and demonstrate the mechanics before comparing it with framework-managed execution.
+
+Retrieval:
+- PostgreSQL with pgvector.
+- Configurable chunking and embedding models.
+- Vector similarity search.
+- PostgreSQL full-text search for keyword retrieval.
+- Reciprocal Rank Fusion for hybrid retrieval.
+- Optional reranking behind an interface.
+
+Observability:
+- Langfuse as the primary tracing and evaluation integration.
+- OpenTelemetry for application instrumentation where useful.
+- LangSmith as an optional, independently configurable comparison integration.
+- Structured JSON logs and application metrics.
+
+Testing and quality:
+- pytest.
+- Unit, integration, security, and regression tests.
+- A versioned golden evaluation dataset.
+- Deterministic metrics plus optional LLM-as-judge evaluation.
+
+Infrastructure:
+- Docker Compose.
+- PostgreSQL with pgvector.
+- Optional Redis for caching and rate limiting.
+- No Kubernetes or unnecessary distributed infrastructure in the MVP.
+
+Use stable, mutually compatible dependency versions. Pin dependencies and document version choices. Do not assume APIs from outdated LangChain, LangGraph, Langfuse, or LangSmith examples.
+
+## 4. Core Architecture
+
+Implement the following logical pipeline:
+
+API request
+  -> Authentication and request validation
+  -> Request and execution budget initialization
+  -> Agent harness
+  -> LangGraph workflow
+      -> Request classification
+      -> Workflow planning
+      -> Retrieval and/or tool execution
+      -> Evidence validation
+      -> Answer generation
+      -> Citation and output validation
+      -> Bounded retry or correction, if required
+      -> Final response
+  -> Trace and metrics finalization
+
+Supporting systems:
+
+- PostgreSQL: documents, chunks, metadata, sessions, executions, evaluation datasets, and results.
+- pgvector: embeddings and vector search.
+- Langfuse: LLM and workflow traces.
+- Optional LangSmith: comparative tracing/evaluation adapter.
+- Monitoring service: latency, cost, failures, quality, and drift signals.
+- CLI: ingest documents, run queries, execute evaluations, and compare experiments.
+
+Keep the LLM provider, embeddings, vector search, tools, observability, and evaluation implementations behind explicit interfaces where doing so improves testability.
+
+Avoid unnecessary abstractions. Prefer readable, typed code.
+
+## 5. Harness Engineering
+
+Create a central execution harness responsible for controlling agent execution.
+
+Implement these responsibilities:
+
+### Execution context
+
+Define a typed execution context containing:
+
+- Request ID and execution ID.
+- User or tenant identifier where applicable.
+- Current workflow state.
+- Request deadline.
+- Maximum model calls.
+- Maximum agent steps.
+- Maximum tool calls.
+- Maximum retries.
+- Token or monetary budget.
+- Allowed tools and permissions.
+- Cancellation status.
+- Collected trace identifiers.
+- Accumulated usage and cost.
+
+### Policy enforcement
+
+Before each model call or tool call:
+
+- Check cancellation and deadline.
+- Check the relevant execution budget.
+- Validate tool permissions.
+- Validate and normalize tool arguments.
+- Enforce per-tool timeouts.
+- Record the attempted operation.
+- Reject execution when the budget is exhausted.
+
+Do not trust the model to enforce these policies itself.
+
+### Context management
+
+Implement:
+
+- Bounded conversation history.
+- Relevant document context selection.
+- Duplicate passage removal.
+- Context size limits.
+- Explicit separation between system instructions, user input, tool output, and untrusted document content.
+- Truncation or summarization policies where needed.
+
+### Output validation
+
+Validate model outputs against Pydantic schemas when structured output is required.
+
+For failed validation, allow a small bounded correction attempt. Never create an infinite repair loop.
+
+### Failure handling
+
+Define typed errors for:
+
+- Provider errors.
+- Rate limits.
+- Timeouts.
+- Invalid tool arguments.
+- Tool execution failures.
+- Budget exhaustion.
+- Invalid model output.
+- Retrieval failures.
+- Verification failures.
+
+Retry only transient and safe failures. Use bounded exponential backoff with jitter for eligible retries.
+
+Do not blindly retry non-idempotent operations.
+
+### Required demonstration
+
+Create tests proving that:
+
+- A tool cannot execute without permission.
+- The harness stops at the step limit.
+- The harness stops at the deadline.
+- The harness stops when its budget is exhausted.
+- Malformed tool arguments are rejected.
+- Cancellation prevents subsequent operations.
+- Retries cannot continue indefinitely.
+
+## 6. Agent Loop Engineering
+
+Implement a custom agent loop before introducing LangGraph orchestration.
+
+The loop should follow this sequence:
+
+1. Build a bounded model input.
+2. Invoke the model.
+3. Record usage, latency, and the model response.
+4. Validate the response.
+5. If the response is final, validate and return it.
+6. If the response requests a tool, validate the tool name and arguments.
+7. Ask the harness for permission to execute it.
+8. Execute the tool with a timeout.
+9. Append the tool result to the execution state.
+10. Repeat until completion, cancellation, failure, or a configured limit.
+
+Create a typed model response contract with explicit outcomes such as:
+
+- FINAL
+- TOOL_CALLS
+
+Use the provider's supported structured-output or tool-calling API. Do not parse arbitrary natural-language text as executable instructions.
+
+Implement:
+
+- A maximum of 8 agent steps by default.
+- A configurable model-call limit.
+- A configurable tool-call limit.
+- A configurable deadline.
+- A configurable cost budget.
+- A maximum of 2 correction attempts per eligible failure.
+- An execution ledger recording model calls, tools, results, and failures.
+
+Make limits configurable; these values are initial defaults, not universal production settings.
+
+Implement three tools initially:
+
+1. document_search(query, filters)
+2. calculator(expression)
+3. document_metadata(document_id)
+
+The calculator must use a safe, restricted expression evaluator. Do not use unrestricted eval.
+
+The metadata tool must enforce document ownership and access control.
+
+The document search tool must use the retrieval subsystem rather than inventing document contents.
+
+Write unit tests for normal completion, multiple tool calls, repeated tool-call loops, invalid arguments, tool failure, timeout, cancellation, and budget exhaustion.
+
+## 7. Graph Engineering With LangGraph
+
+After the custom loop works, implement the main agent workflow in LangGraph.
+
+Define a typed graph state containing:
+
+- Request and execution IDs.
+- Original user question.
+- Classified intent.
+- Plan.
+- Retrieved passages.
+- Tool results.
+- Draft answer.
+- Citation records.
+- Validation findings.
+- Execution budget and counters.
+- Errors and retry count.
+- Final answer and completion status.
+
+Build these nodes:
+
+1. classify_request
+2. plan_workflow
+3. retrieve_evidence
+4. select_or_execute_tools
+5. generate_answer
+6. validate_citations
+7. verify_answer
+8. retry_or_revise
+9. human_approval
+10. finalize_execution
+
+Create conditional edges for:
+
+- Retrieval required versus not required.
+- Tool execution required versus not required.
+- Successful verification versus bounded correction.
+- Recoverable failure versus terminal failure.
+- Human approval required versus automatic continuation.
+
+Use explicit stop conditions and enforce budgets through the harness, not just graph prompts.
+
+Add checkpointing with a supported LangGraph checkpointer. Persist resumable state where practical, but avoid persisting secrets or unnecessary sensitive content.
+
+Use human approval for any future write-capable or externally consequential tools. The initial calculator, metadata lookup, and document search tools should be read-only.
+
+Document when to use a graph, when a simple function pipeline is enough, and when a bounded agent loop is appropriate.
+
+Do not implement multiple autonomous agents merely to make the project look advanced. First make one agent and one graph reliable.
+
+## 8. RAG Engineering
+
+Implement document ingestion and retrieval as a separate subsystem.
+
+### Ingestion pipeline
+
+Support at least:
+
+- TXT.
+- Markdown.
+- PDF with text extraction.
+- Explicit document metadata and ownership.
+
+Pipeline:
+
+Upload
+  -> File validation
+  -> Size and type limits
+  -> Text extraction
+  -> Normalization
+  -> Chunking
+  -> Embedding generation
+  -> PostgreSQL and pgvector storage
+  -> Ingestion status update
+
+Store:
+
+- Document ID.
+- Document version.
+- Tenant or owner ID.
+- File name and content hash.
+- Page number or source location when available.
+- Chunk index.
+- Chunk text.
+- Embedding model and version.
+- Ingestion status and timestamps.
+
+Make ingestion idempotent using content hashes and versioning.
+
+Never silently mark partially failed ingestion as successful.
+
+### Chunking
+
+Implement a configurable chunker with:
+
+- Target chunk size.
+- Overlap.
+- Stable chunk identifiers.
+- Source metadata preservation.
+- Document boundary preservation where practical.
+
+Avoid splitting every document using the same arbitrary strategy without testing alternatives.
+
+### Retrieval
+
+Implement:
+
+1. Vector retrieval.
+2. PostgreSQL full-text retrieval.
+3. Hybrid ranking using Reciprocal Rank Fusion.
+4. Metadata filtering and tenant isolation.
+5. Duplicate chunk removal.
+6. Optional reranking through an interface.
+
+Return structured retrieval results containing chunk IDs, document IDs, text, page/source metadata, and scores.
+
+### Answer grounding
+
+The answer generator must receive the retrieved evidence explicitly.
+
+Citations must refer to actual retrieved sources. Validate that each cited chunk or source exists and belongs to the authorized document set.
+
+When evidence is insufficient, the system must say so rather than inventing facts.
+
+### RAG evaluation
+
+Measure:
+
+- Recall@k.
+- Mean Reciprocal Rank.
+- Hit rate.
+- Context relevance.
+- Citation validity.
+- Answer groundedness.
+- Answer correctness on questions with reference answers.
+
+Create tests for empty documents, duplicate ingestion, missing embeddings, unauthorized documents, irrelevant retrieval, and unsupported questions.
+
+## 9. Tool System and MCP Extension
+
+Define a common tool interface with:
+
+- Name and description.
+- Pydantic input schema.
+- Output schema.
+- Permission requirements.
+- Timeout.
+- Idempotency characteristics.
+- Execution function.
+- Error mapping.
+
+Create a tool registry and allowlist.
+
+The model may request a tool, but only the harness can authorize and execute it.
+
+Add an optional MCP adapter after the local tool registry works. Demonstrate how MCP standardizes tool discovery and invocation, while retaining the same authorization and budget controls.
+
+Do not expose UNRESTRICTED shell execution, arbitrary Python execution, or unrestricted network requests to the agent. Workspace access (9.1) is the only exception, and it is restricted in code.
+
+Treat tool outputs and retrieved documents as untrusted data.
+
+### 9.1 Sandboxed workspace tools (terminal + filesystem)
+
+The agent can operate on exactly one configured directory, WORKSPACE_ROOT (per tenant:
+WORKSPACE_ROOT/<tenant_id>/ or an explicitly registered directory). Tools:
+
+- workspace_list(path)                   read-only
+- workspace_read(path, max_bytes)        read-only
+- workspace_search(pattern, glob)        read-only (grep-like, implemented in Python, no shell)
+- workspace_write(path, content)         WRITE  -> requires human approval
+- workspace_edit(path, old, new)         WRITE  -> requires human approval
+- workspace_exec(argv)                   EXEC   -> allowlisted commands only; approval required
+                                                 unless the command is on the read-only allowlist
+
+Enforcement in code (never in the prompt):
+
+- Path jail: resolve every path with realpath; reject anything outside WORKSPACE_ROOT, including
+  via "..", absolute paths, and symlinks that escape the root.
+- Deny-list of sensitive names even inside the root: .env, .git/config, *.pem, id_rsa*, .ssh/.
+- Commands run with argv (no shell=True, no pipes, no globbing, no command substitution),
+  cwd fixed to the workspace, a scrubbed environment (no API keys), a timeout, and an output cap.
+- Command allowlist split into read-only (ls, cat, head, tail, wc, grep, find, git status,
+  git diff, git log, pytest --collect-only) and write/exec (python -m pytest, git add, mkdir,
+  etc.); write/exec commands go through the LangGraph human_approval node (interrupt/resume).
+- Write size limits, binary-file rejection, and an audit record in execution_events for every
+  attempted and executed operation, including rejections.
+- The UI terminal panel (Section 24) executes through the SAME executor and policy; it is not a
+  raw PTY.
+
+Tests must prove: path traversal is rejected, symlink escape is rejected, non-allowlisted
+commands are rejected, writes block until approved, rejected approvals perform no write, and
+secrets are not present in the command environment.
+
+## 10. Observability and Tracing
+
+Integrate Langfuse as the primary observability backend.
+
+Capture traces for each request, with spans or equivalent observations for:
+
+- Request classification.
+- Planning.
+- Retrieval.
+- Embedding calls.
+- Model generations.
+- Tool selection.
+- Tool execution.
+- Answer generation.
+- Citation validation.
+- Verification.
+- Retries.
+- Finalization.
+
+Record where available:
+
+- Input and output token counts.
+- Model identifier.
+- Latency.
+- Estimated cost.
+- Retry count.
+- Tool-call count.
+- Retrieved document IDs and chunk IDs.
+- Success or failure status.
+- Evaluation scores.
+- Prompt and workflow version identifiers.
+
+Do not log API keys, authorization headers, or raw sensitive documents by default. Redact or minimize sensitive trace content.
+
+Use a single trace correlation ID across the API, graph, tools, and observability events.
+
+Add an optional LangSmith integration behind a separate configuration flag. Make it possible to compare the two systems on a small evaluation subset without sending all production data to both.
+
+The application must still run when external observability credentials are absent. Provide a no-op or local logging implementation for development and tests.
+
+## 11. Custom Evaluation Framework
+
+Build an evaluation framework rather than relying exclusively on a vendor dashboard.
+
+Create a versioned JSONL dataset. Each case should support:
+
+- Test ID.
+- User question.
+- Required evidence or expected document IDs.
+- Expected tool behavior where relevant.
+- Reference answer where available.
+- Expected citation requirements.
+- Test category.
+- Dataset version.
+
+Include at least 30 meaningful evaluation cases by the end of the project. Include answerable questions, unanswerable questions, multi-document questions, tool-use questions, and adversarial inputs.
+
+Implement deterministic evaluators for:
+
+- Citation validity.
+- Required source retrieval.
+- Structured-output validity.
+- Tool argument correctness.
+- Unauthorized tool-call rejection.
+- Maximum execution steps.
+- Expected failure behavior.
+
+Implement optional model-based evaluators for:
+
+- Answer correctness.
+- Groundedness.
+- Relevance.
+- Completeness.
+
+Use reference answers and deterministic checks whenever possible. Do not treat an LLM judge score as objective ground truth.
+
+Store evaluation runs with:
+
+- Dataset version.
+- Model and prompt versions.
+- Retrieval configuration.
+- Workflow version.
+- Individual case results.
+- Aggregate metrics.
+- Failures and explanations.
+- Cost and latency measurements.
+
+Create a CLI command to execute an entire evaluation dataset and output a JSON report plus a readable summary.
+
+Add regression checks that compare a new run against a baseline and fail CI when configured quality thresholds are breached.
+
+## 12. Cost and Latency Optimization
+
+Implement a usage and cost accounting layer.
+
+Track per request:
+
+- Model calls.
+- Input and output tokens.
+- Embedding calls.
+- Tool calls.
+- Retries.
+- Estimated provider cost.
+- End-to-end latency.
+- Cost per successful task.
+
+Keep provider pricing configurable and versioned. If pricing is unknown, label cost as unavailable rather than fabricating an amount.
+
+Local Ollama models have no per-token price. Record their monetary cost as 0 with pricing source
+"local", and still track tokens and latency (on local hardware, latency and tokens are the real
+cost). Optionally compute a "hosted-equivalent cost" from a configurable reference price table,
+clearly labelled as a hypothetical comparison.
+
+Implement these optimizations incrementally:
+
+1. Remove redundant model calls.
+2. Reduce duplicate and irrelevant retrieved chunks.
+3. Bound the conversation history and context size.
+4. Route simple tasks to a cheaper model and complex tasks to a stronger model.
+5. Cache deterministic tool results.
+6. Add safe embedding or retrieval caching.
+7. Add optional semantic caching with conservative similarity thresholds and permission-aware cache keys.
+
+Cache keys must include relevant tenant, authorization, document version, model, and configuration information.
+
+Do not cache sensitive responses across users. Define expiration and invalidation rules.
+
+Benchmark the baseline against optimized configurations using the same dataset.
+
+Report:
+
+- Cost per request.
+- Cost per successful task.
+- p50 and p95 latency.
+- Success rate.
+- Quality score.
+- Model calls and tool calls per request.
+
+Optimization is successful only when the measured cost or latency improves without unacceptable quality loss.
+
+## 13. Drift and Operational Monitoring
+
+Implement a simple custom monitoring subsystem.
+
+### Quality drift
+
+Compare evaluation scores over time and against a stored baseline.
+
+### Retrieval drift
+
+Track retrieval recall, hit rate, source distribution, and ranking metrics across dataset and configuration versions.
+
+### Data drift
+
+Track document ingestion failures, corpus changes, metadata distributions, and changes in the question dataset where appropriate.
+
+### Operational drift
+
+Track latency, timeout rates, provider errors, retry rates, token usage, and cost per successful task.
+
+Implement:
+
+- Configurable thresholds.
+- Evaluation run history.
+- Baseline comparison.
+- Alert records.
+- An API to query monitoring results.
+- A CLI command to run drift checks.
+
+Start with a deterministic threshold-based detector. Add statistical methods only when justified by the collected data.
+
+Create a regression demonstration: intentionally degrade chunking or retrieval configuration, rerun the golden dataset, and show the system detecting the decline.
+
+Distinguish a real measured drift signal from an unverified suspicion.
+
+## 14. API Design
+
+Expose versioned endpoints.
+
+### Health and operations
+
+- GET /health
+- GET /ready
+- GET /api/v1/metrics
+- GET /api/v1/executions/{execution_id}
+- GET /api/v1/executions/{execution_id}/trace
+
+### Documents
+
+- POST /api/v1/documents
+- GET /api/v1/documents
+- GET /api/v1/documents/{document_id}
+- DELETE /api/v1/documents/{document_id}
+- POST /api/v1/documents/{document_id}/reindex
+
+### Retrieval
+
+- POST /api/v1/retrieval/search
+
+### Agent execution
+
+- POST /api/v1/agent/run
+- POST /api/v1/agent/run/stream
+
+The streaming endpoint should use Server-Sent Events if appropriate and provide structured events for execution progress, tool activity, citations, and final completion.
+
+### Evaluation
+
+- POST /api/v1/evaluations/run
+- GET /api/v1/evaluations/runs
+- GET /api/v1/evaluations/runs/{run_id}
+- GET /api/v1/evaluations/compare
+
+### Monitoring
+
+- GET /api/v1/monitoring/summary
+- GET /api/v1/monitoring/drift
+- POST /api/v1/monitoring/check
+
+### Configuration and experiments
+
+- GET /api/v1/experiments
+- POST /api/v1/experiments/run
+
+### Approvals (human-in-the-loop)
+
+- GET /api/v1/approvals?status=pending
+- POST /api/v1/approvals/{approval_id}/approve
+- POST /api/v1/approvals/{approval_id}/reject
+
+Approving resumes the paused LangGraph execution from its checkpoint.
+
+### Workspace
+
+- GET /api/v1/workspace/tree?path=
+- GET /api/v1/workspace/file?path=
+- PUT /api/v1/workspace/file          (user-initiated write; same path jail)
+- POST /api/v1/workspace/exec         (same allowlist/executor as the agent tool)
+- WS  /api/v1/workspace/terminal      (streams command output to the UI terminal panel)
+
+### Models
+
+- GET /api/v1/models                  (installed Ollama models and which role each serves)
+
+Keep execution endpoints bounded and protect expensive operations with limits. Validate all inputs and return consistent error responses.
+
+Do not expose secrets or internal stack traces in public API responses.
+
+Implement authentication before treating the service as multi-user. Enforce document-level ownership checks on every relevant read, retrieval, deletion, and tool operation.
+
+## 15. Database and Persistence
+
+Use Alembic migrations.
+
+Create suitable tables or equivalent persistence structures for:
+
+- documents
+- document_chunks
+- agent_executions
+- execution_events
+- evaluation_datasets
+- evaluation_cases
+- evaluation_runs
+- evaluation_results
+- monitoring_alerts
+- experiment_runs
+
+Use JSONB only for genuinely variable structured data; keep frequently queried fields in typed columns.
+
+Add indexes for common lookup paths and tenant isolation.
+
+Use transactions for related database updates. Add foreign keys and uniqueness constraints where appropriate.
+
+Do not persist secrets, unrestricted model chain-of-thought, or unnecessary sensitive payloads. Store concise execution decisions, tool arguments where safe, evidence references, and final outputs.
+
+## 16. Security Requirements
+
+Implement:
+
+- Input validation and upload size limits.
+- File type validation.
+- SQL parameterization through safe ORM/query practices.
+- Authentication and document ownership enforcement.
+- Tenant isolation in retrieval and cache keys.
+- Tool allowlisting and permission checks.
+- Per-request timeouts and budgets.
+- Rate limiting or an explicitly documented development-only alternative.
+- Secret management through environment variables.
+- Safe error messages.
+- Prompt-injection tests.
+- Redaction of sensitive logs and traces.
+- Safe handling of untrusted document and tool output.
+
+A prompt telling the model to ignore malicious document instructions is not sufficient security. Enforce restrictions in code.
+
+For this learning project, use only synthetic or non-sensitive documents. Document tools are read-only; workspace write/exec tools are allowed only under the Section 9.1 controls, against a disposable directory, never your home directory or a real repository without a backup.
+
+## 17. Repository Structure
+
+Create a clean repository resembling:
+
+agentops-ai/
+  app/
+    main.py
+    api/
+      health.py
+      documents.py
+      retrieval.py
+      agent.py
+      evaluations.py
+      monitoring.py
+      experiments.py
+    core/
+      config.py
+      errors.py
+      logging.py
+      security.py
+      budgets.py
+      execution_context.py
+    db/
+      models.py
+      session.py
+      migrations/
+    ingestion/
+      parsers.py
+      chunking.py
+      embeddings.py
+      pipeline.py
+    retrieval/
+      vector_search.py
+      keyword_search.py
+      hybrid_search.py
+      reranking.py
+    llm/
+      provider.py
+      schemas.py
+      usage.py
+    tools/
+      base.py
+      registry.py
+      document_search.py
+      calculator.py
+      document_metadata.py
+      workspace.py          # path jail, executor, workspace_* tools
+    agents/
+      custom_loop.py
+      harness.py
+      graph.py
+      state.py
+      nodes.py
+      policies.py
+    observability/
+      interfaces.py
+      langfuse_adapter.py
+      langsmith_adapter.py
+      telemetry.py
+    evaluation/
+      dataset.py
+      evaluators.py
+      runner.py
+      regression.py
+    monitoring/
+      cost.py
+      latency.py
+      drift.py
+      alerts.py
+    experiments/
+      runner.py
+      configurations.py
+  web/                      # UI (Section 24), built after the backend
+  docs/
+    architecture/system-design.png
+    journal/                # Recorder agent output: what was built and why
+    interview/              # Recorder agent output: Q&A per milestone
+  datasets/
+    golden_questions.jsonl
+  tests/
+    unit/
+    integration/
+    security/
+    regression/
+  scripts/
+    ingest.py
+    run_agent.py
+    evaluate.py
+    compare_experiments.py
+    check_drift.py
+  alembic.ini
+  Dockerfile
+  docker-compose.yml
+  pyproject.toml
+  .env.example
+  .gitignore
+  README.md
+
+Adjust the structure if implementation evidence shows a simpler design is better. Do not create empty files or placeholder modules just to match this tree.
+
+## 18. Five-Day Implementation Schedule (Wed 2026-10-21 -> Sun 2026-10-25)
+
+Two original "days" are compressed into each working day where the concepts are adjacent.
+Each day ends with: tests green, README updated, Recorder agent run (Section 22).
+
+### Day 1 — Wed 21: Foundation + LLM + RAG (original Days 1-2)
+Ollama install and model benchmark, FastAPI app, config, structured logging, Postgres+pgvector in
+Docker Compose, SQLAlchemy models, Alembic migrations, Ollama provider adapter + fake provider,
+health/ready, ingestion (TXT/MD/PDF), chunking, embeddings, vector + full-text + RRF hybrid search,
+tenant isolation, retrieval API.
+Deliverable: upload a document, search it, get scored chunks with sources.
+
+### Day 2 — Thu 22: Harness + custom loop + LangGraph (original Days 3-4)
+Execution context, budgets, typed errors, retry policy, tool interface and registry, the three
+document tools, custom agent loop with ledger, LangGraph workflow with all nodes, conditional
+edges, checkpointing, human_approval interrupt/resume, SSE streaming, approvals API.
+Deliverable: grounded answers with validated citations through both the loop and the graph,
+with harness limit tests passing.
+
+### Day 3 — Fri 23: Workspace tools + observability + evaluation (original Day 5 + Section 9.1)
+Sandboxed workspace tools and executor, workspace API and terminal WebSocket, security tests,
+Langfuse adapter (no-op fallback), optional LangSmith, golden dataset (30+ cases),
+deterministic and LLM-judge evaluators, evaluation runner, CLI, persisted runs.
+Deliverable: the agent can read/edit files in the workspace with approval; eval CLI reports scores.
+
+### Day 4 — Sat 24: Optimization, drift, hardening (original Days 6-7)
+Cost/latency accounting, model routing (small vs large local model), tool/embedding/semantic
+caching, baseline vs optimized benchmark, drift detector, alerts, regression demo, rate limiting,
+error handling, Dockerfile, CI workflow, README.
+Deliverable: benchmark report from real runs, drift check that catches a deliberate regression,
+CI green.
+
+### Day 5 — Sun 25: UI + end-to-end demo
+Web UI (Section 24) over the finished API, end-to-end demo script, final documentation, known
+limitations, consolidated interview guide.
+Deliverable: a person can run docker compose + ollama + the UI and complete the demo flow.
+
+## 19. Engineering Workflow
+
+Follow this sequence throughout development:
+
+1. Inspect the existing repository before modifying it.
+2. Produce a concise implementation plan and identify dependencies.
+3. Implement one milestone at a time.
+4. Write tests alongside each important component.
+5. Run formatting, linting, type checks where practical, and relevant tests.
+6. Fix actual failures before moving to the next milestone.
+7. Update documentation and configuration examples.
+8. Record architectural decisions and trade-offs.
+9. Keep the repository runnable after every milestone.
+10. Avoid unnecessary rewrites of already working components.
+
+Use environment variables for configuration. Provide safe defaults for development and fail clearly when a required production setting is missing.
+
+Do not claim a test, benchmark, deployment, or integration works unless you have actually run or verified it.
+
+Do not invent provider pricing or evaluation results. Mark unavailable results clearly.
+
+When credentials are unavailable, provide mock-based tests and a clear integration setup, without claiming a live provider integration was verified.
+
+## 20. Definition of Done
+
+The project is complete when all applicable criteria below pass:
+
+- The backend starts through documented local commands.
+- Database migrations work on a clean database.
+- Document ingestion and retrieval work end to end.
+- Answers cite real, authorized source passages.
+- The custom agent loop works independently of LangGraph.
+- The harness enforces execution limits and tool permissions.
+- The LangGraph workflow handles branching and bounded retries.
+- Execution traces and usage metrics are recorded.
+- The evaluation CLI runs a versioned dataset and produces a report.
+- Regression checks can fail when a configured threshold is breached.
+- Cost and latency comparisons use actual recorded measurements.
+- A drift check detects a deliberately introduced retrieval regression.
+- Security tests cover unauthorized document access and prohibited tool calls.
+- Automated tests run in CI.
+- Docker Compose and the README provide reproducible setup instructions.
+- Optional observability integrations degrade gracefully when credentials are absent.
+- Known limitations and unimplemented features are explicitly documented.
+- Workspace tools enforce the path jail, command allowlist, and approval gate (tests prove it).
+- Every milestone has a journal entry and an interview Q&A file from the Recorder agent.
+- The UI completes the demo flow using only public API endpoints.
+
+## 21. Final Deliverables
+
+Produce:
+
+1. Complete backend source code.
+2. Docker Compose configuration.
+3. Database migrations.
+4. Example environment configuration.
+5. Automated tests.
+6. A versioned evaluation dataset.
+7. Evaluation and benchmark reports generated by actual runs.
+8. API documentation through OpenAPI.
+9. Architecture and sequence diagrams.
+10. A detailed README with setup, execution, testing, evaluation, and troubleshooting instructions.
+11. A comparison of custom loop versus LangGraph orchestration.
+12. A comparison of baseline versus optimized model/retrieval configurations.
+13. A documented security model and failure-handling strategy.
+14. A five-day learning journal listing concepts implemented, experiments run, and trade-offs learned.
+
+## 22. Recorder Agent (runs after every milestone)
+
+After each milestone is implemented AND its tests pass, trigger a separate Recorder agent. It reads
+the code and test output produced by that milestone (not the plan) and writes:
+
+1. docs/journal/<NN>-<milestone>.md — what was built, files touched, key design decisions,
+   trade-offs taken and rejected, commands to run it, test results, known limitations.
+2. docs/interview/<NN>-<milestone>.md — interview questions WITH answers grounded in this code:
+   - Basic: definitions and "what does X do" (8-10 questions)
+   - Logical: "why", ordering, edge cases, what breaks if removed (8-10)
+   - Advanced: scale, failure modes, production concerns (6-8)
+   - Scenario: "a user reports...", "at 10x traffic..." with a worked answer (4-6)
+   - Trade-off: option A vs B, what was chosen here and why, when the other wins (3-5)
+   - Justification: defend a specific decision in this codebase against a skeptic (3-5)
+   - System design: how this component fits the whole, scaling and evolution path (2-3)
+   Every answer must reference real files/functions; no invented behaviour.
+
+The Recorder only writes under docs/; it never edits source code.
+
+## 23. Local Models (Ollama) — hardware-fit selection
+
+Target machine: Apple M4, 16 GB unified memory, 10 cores. Budget roughly 8-9 GB for models so
+Postgres, the API, the UI dev server, and the OS have headroom.
+
+| Role                         | Model              | Approx size (Q4) | Why                                   |
+|------------------------------|--------------------|------------------|---------------------------------------|
+| Main agent / answer / tools  | qwen3:8b           | ~5.2 GB          | Native tool calling + JSON schema     |
+|                              |                    |                  | output in Ollama; strong reasoning    |
+| Router / classifier / cheap  | qwen3:1.7b         | ~1.4 GB          | Fast; used for classification and     |
+|                              |                    |                  | the "cheap model" routing experiment  |
+| Embeddings                   | nomic-embed-text   | ~0.3 GB          | 768-dim, 8k context, well supported   |
+
+Fallbacks: llama3.1:8b (main) and llama3.2:3b (router) if qwen3 underperforms on the eval set.
+Not recommended on 16 GB: 14B+ models (swap pressure makes latency unusable alongside Docker).
+Disable qwen3 "thinking" mode for structured outputs (think=false) to save tokens and latency;
+optionally enable it for the verify_answer node and measure the difference as an experiment.
+Model choice is configuration, and the final choice must be justified by the Day 4 benchmark.
+
+## 24. Web UI (built on Day 5, after the backend)
+
+Stack: React + TypeScript + Vite + Tailwind. Talks only to the public API.
+
+Screens:
+- Chat: ask questions, stream SSE events (classify, plan, retrieve, tool calls, verify), render
+  answers with clickable citations that open the source chunk.
+- Documents: upload, list, status, delete, reindex.
+- Workspace: file tree + file viewer/editor for WORKSPACE_ROOT, and a terminal panel that runs
+  commands through the sandboxed executor (Section 9.1), showing rejections clearly.
+- Approvals: pending write/exec requests with a diff preview; approve or reject.
+- Executions: per-execution timeline from the trace/ledger (steps, tools, tokens, latency).
+- Evaluations & Monitoring: runs, scores, baseline comparison, drift alerts.
+
+The UI must not hold credentials beyond the user's API token and must never bypass approvals.
+
+## Final instruction
+
+Start with Day 1 (Section 18) and implement the actual repository. Do not dump every file at once or stop after producing a plan.
+
+First inspect the environment, create or inspect the project, and identify the smallest working milestone. Then implement it, run tests, report the results, and continue incrementally.
+
+Prioritize a working, understandable, testable backend over a large amount of generated code. Every major AI engineering concept must have both an implementation and a test or experiment that demonstrates why it matters.

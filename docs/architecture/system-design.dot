@@ -1,0 +1,103 @@
+// AgentOps AI — system design. Render: dot -Tpng -Gdpi=160 system-design.dot -o system-design.png
+digraph AgentOps {
+  rankdir=TB; compound=true; newrank=true;
+  graph [fontname="Helvetica", fontsize=13, pad=0.4, nodesep=0.35, ranksep=0.7, bgcolor="white",
+         label=<<b>AgentOps AI — System Design</b><br/><font point-size="11">Local-first agentic RAG platform · FastAPI · LangGraph · Postgres/pgvector · Ollama · M4 16 GB</font>>,
+         labelloc=t, fontsize=20];
+  node  [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#ffffff", color="#5b6577", penwidth=1.2];
+  edge  [fontname="Helvetica", fontsize=9, color="#5b6577", arrowsize=0.7];
+
+  subgraph cluster_clients {
+    label=<<b>Clients</b>>; style="rounded,filled"; fillcolor="#eef4ff"; color="#9db6e8";
+    ui   [label="Web UI (Day 5)\nReact + Vite\nChat · Docs · Workspace\nTerminal · Approvals · Evals"];
+    cli  [label="CLI scripts\ningest · run_agent · evaluate\ncompare · check_drift"];
+  }
+
+  subgraph cluster_api {
+    label=<<b>FastAPI  /api/v1</b>>; style="rounded,filled"; fillcolor="#f3f0ff"; color="#b3a6e6";
+    gate [label="Auth · tenant · validation\nrate limit · request ID", fillcolor="#e6e0ff"];
+    routes [label="documents · retrieval · agent/run (+SSE)\napprovals · workspace (+WS terminal)\nevaluations · monitoring · experiments · models"];
+  }
+
+  subgraph cluster_harness {
+    label=<<b>Agent Harness — policy enforced in code</b>>; style="rounded,filled"; fillcolor="#fff6e6"; color="#e5bf7a";
+    ctx  [label="ExecutionContext\ndeadline · max steps/model/tool calls\nretries · token budget · cancel"];
+    pol  [label="Policy gate (before EVERY call)\npermission · args schema · budget\ntimeout · retry w/ backoff+jitter"];
+    ctxm [label="Context manager\nbounded history · dedupe\nuntrusted-content fencing"];
+    ledger [label="Execution ledger\n(events, usage, failures)"];
+  }
+
+  subgraph cluster_graph {
+    label=<<b>LangGraph workflow (checkpointed)</b>>; style="rounded,filled"; fillcolor="#e9f8ef"; color="#8fd0a8";
+    n1 [label="classify_request"]; n2 [label="plan_workflow"];
+    n3 [label="retrieve_evidence"]; n4 [label="select_or_execute_tools"];
+    n5 [label="generate_answer"]; n6 [label="validate_citations"];
+    n7 [label="verify_answer"]; n8 [label="retry_or_revise\n(max 2)"];
+    n9 [label="human_approval\n(interrupt / resume)", fillcolor="#ffe3e3", color="#d77"];
+    n10 [label="finalize_execution", fillcolor="#d6f5e0"];
+    n1 -> n2;
+    n2 -> n3 [label="needs evidence"]; n2 -> n4 [label="needs tools"]; n2 -> n5 [label="direct"];
+    n3 -> n4 [label="+tools"]; n3 -> n5;
+    n4 -> n9 [label="write/exec", color="#c55"]; n9 -> n4 [label="approved", color="#c55"];
+    n4 -> n5; n5 -> n6 -> n7;
+    n7 -> n10 [label="pass"]; n7 -> n8 [label="fail"]; n8 -> n5 [label="revise"]; n8 -> n10 [label="exhausted"];
+  }
+  loop [label="Custom agent loop\n(FINAL | TOOL_CALLS, ≤8 steps)\nsame harness — baseline vs graph", fillcolor="#fff0d6"];
+
+  subgraph cluster_tools {
+    label=<<b>Tool registry (allowlist)</b>>; style="rounded,filled"; fillcolor="#fdeef6"; color="#e3a1c4";
+    tdoc [label="document_search\ndocument_metadata\ncalculator (safe AST)\n— read-only"];
+    tws  [label="workspace_list/read/search — read\nworkspace_write/edit — APPROVAL\nworkspace_exec — allowlisted argv"];
+    mcp  [label="MCP adapter (optional)\nsame auth + budgets", style="rounded,dashed,filled"];
+  }
+
+  subgraph cluster_sandbox {
+    label=<<b>Sandbox</b>>; style="rounded,filled"; fillcolor="#ffecec"; color="#e09a9a";
+    jail [label="Path jail (realpath ⊂ WORKSPACE_ROOT)\ndeny .env/.ssh/keys · no shell=True\nscrubbed env · timeout · output cap"];
+    wsdir [label="WORKSPACE_ROOT/\n<tenant>/", shape=folder, fillcolor="#fff"];
+  }
+
+  subgraph cluster_rag {
+    label=<<b>RAG subsystem</b>>; style="rounded,filled"; fillcolor="#e8f6fb"; color="#8cc7dc";
+    ingest [label="Ingestion\nvalidate → extract (TXT/MD/PDF)\nnormalize → chunk → embed\nidempotent by content hash"];
+    hybrid [label="Hybrid retrieval\nvector (pgvector) + full-text (tsvector)\n→ RRF → dedupe → rerank?\ntenant filter ALWAYS"];
+  }
+
+  subgraph cluster_llm {
+    label=<<b>Ollama (local, free)</b>>; style="rounded,filled"; fillcolor="#f0f0f0"; color="#aaa";
+    big  [label="qwen3:8b\nagent · answer · tools · verify"];
+    small [label="qwen3:1.7b\nclassify · route (cheap)"];
+    emb  [label="nomic-embed-text\n768-dim embeddings"];
+  }
+  provider [label="LLM provider adapter\nstructured output · tool calls\nusage + latency · fake for tests", fillcolor="#f7f7f7"];
+
+  subgraph cluster_data {
+    label=<<b>PostgreSQL 16 + pgvector</b>>; style="rounded,filled"; fillcolor="#eaf0f7"; color="#8fa7c6";
+    db [shape=cylinder, label="documents · document_chunks (vector, tsvector)\nagent_executions · execution_events · approvals\neval datasets/cases/runs/results\nmonitoring_alerts · experiment_runs\nLangGraph checkpoints"];
+  }
+
+  subgraph cluster_ops {
+    label=<<b>Observability · Evaluation · Monitoring</b>>; style="rounded,filled"; fillcolor="#f5f9e8"; color="#bcd17f";
+    obs  [label="Tracing interface\nLangfuse (cloud, optional)\nLangSmith (optional) · no-op/JSON logs"];
+    evalr [label="Eval framework\ngolden JSONL v1 (30+ cases)\ndeterministic + LLM-judge\nbaseline regression gate"];
+    mon  [label="Cost/latency accounting · caching\nmodel routing · drift detector\nthreshold alerts"];
+  }
+
+  recorder [label="Recorder agent (dev process)\nafter each milestone →\ndocs/journal + docs/interview Q&A", shape=note, fillcolor="#fffbe0", color="#c9b458"];
+
+  ui -> gate; cli -> gate; gate -> routes;
+  routes -> ctx [lhead=cluster_harness, label="run / stream"];
+  routes -> ingest [label="upload"];
+  ctx -> n1 [lhead=cluster_graph, ltail=cluster_harness, label="drives"];
+  pol -> loop [style=dashed, label="also drives"];
+  n4 -> tdoc [lhead=cluster_tools, label="authorized calls"];
+  tws -> jail; jail -> wsdir;
+  routes -> jail [label="UI terminal\n(same executor)", style=dashed, color="#c55"];
+  tdoc -> hybrid;
+  n3 -> hybrid [label="evidence"];
+  n5 -> provider; n1 -> provider [style=dashed];
+  provider -> big; provider -> small; ingest -> emb; hybrid -> emb [style=dashed, label="query emb"];
+  ingest -> db; hybrid -> db; ledger -> db; n10 -> db [label="checkpoint/final"];
+  ledger -> obs [style=dashed]; evalr -> routes [dir=back, style=dashed, label="runs agent"];
+  obs -> mon [style=dashed]; evalr -> db [style=dashed]; mon -> db [style=dashed];
+}
