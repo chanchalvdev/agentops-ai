@@ -5,7 +5,15 @@ ingestion, hybrid retrieval, grounded answers with validated citations, and (in 
 harness, LangGraph workflow, evaluation, drift monitoring, sandboxed workspace tools, and a web UI.
 
 - Product spec: [product.txt](product.txt) · Architecture: [docs/architecture/system-design.png](docs/architecture/system-design.png)
+- Animated end-to-end flows: [docs/architecture/system-flow.gif](docs/architecture/system-flow.gif)
+  (regenerate: `uv run --with pillow python docs/architecture/render_flow_gif.py`)
 - Progress: [docs/day-checklist.md](docs/day-checklist.md) · Learning notes: [docs/journal/](docs/journal/) · Interview prep: [docs/interview/](docs/interview/)
+
+![AgentOps AI end-to-end flows](docs/architecture/system-flow.gif)
+
+Seven flows: ingestion, grounded Q&A, tool call through the policy gate, workspace write with human
+approval, failure handling, observability/evaluation/drift, and the Recorder process. Badges
+mark what is **built** versus the plan day that delivers it.
 
 ## Quick start
 
