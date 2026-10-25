@@ -301,3 +301,29 @@ async def test_write_tool_without_permission_never_reaches_approval() -> None:
     ctx.permissions = frozenset({"documents:read"})
     result = await runner.run(ctx, "Save the RPO as a note")
     assert result.status != "awaiting_approval" and note.saved == []
+
+
+# --- regressions from the M4 milestone review ---------------------------------------------------
+
+
+async def test_retrieval_outage_is_a_failure_not_insufficient_evidence() -> None:
+    from app.core.errors import RetrievalError
+
+    runner, _, _ = make_runner(GraphModel(), FakeSearch(error=RetrievalError("down")))
+    result = await runner.run(make_ctx(), "?")
+    assert result.status == "failed" and result.error_code == "retrieval_error"
+
+
+async def test_decision_for_a_different_call_is_not_an_approval() -> None:
+    runner, note, _ = make_runner(write_model())
+    ctx = make_ctx()
+    await runner.run(ctx, "Save the RPO as a note")
+    done = await runner.resume(ctx, approved=True, call_id="some-other-call")
+    assert note.saved == [] and done.tool_references[0].output["rejected_by_reviewer"] is True
+
+
+async def test_unparseable_answer_uses_invalid_output_corrections() -> None:
+    model = GraphModel(answers=["not json", {"answer": "5 min [S1].", "citations": ["S1"]}])
+    runner, _, _ = make_runner(model)
+    result = await runner.run(make_ctx(), "?")
+    assert result.status == "answered" and result.corrections == {"invalid_output": 1}

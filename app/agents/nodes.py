@@ -189,6 +189,9 @@ async def retrieve_evidence(state: AgentState, deps: GraphDeps) -> dict[str, Any
             findings.append(f"search failed: {exc.code}")
             continue
         store.add_passages(outcome.output["passages"])
+    if findings and len(findings) == len(state.get("plan", [])):
+        # Every search failed: report an outage, not "your documents do not say".
+        return {"status": "failed", "error_code": "retrieval_error", "findings": findings}
     return {"evidence": store.to_state(), "findings": findings}
 
 
@@ -264,8 +267,12 @@ async def human_approval(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
     decision = interrupt(
         {"call_id": call["id"], "tool": call["name"], "arguments": call["arguments"]}
     )
-    approved = bool(decision.get("approved")) if isinstance(decision, dict) else False
-    reason = decision.get("reason") if isinstance(decision, dict) else None
+    decision = decision if isinstance(decision, dict) else {}
+    if decision.get("call_id") not in (None, call["id"]):
+        # A decision is bound to the call the reviewer saw; anything else is not an approval.
+        decision = {"approved": False, "reason": "decision did not match the pending call"}
+    approved = bool(decision.get("approved"))
+    reason = decision.get("reason")
     pending[index] = PendingCall(
         call=call, status="approved" if approved else "rejected", reason=reason
     )
@@ -317,7 +324,7 @@ async def generate_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
         ),
         name="generate_answer",
     )
-    update: dict[str, Any] = {"previous_output": response.content[:4000], "findings": []}
+    update: dict[str, Any] = {"previous_output": response.content[:8000], "findings": []}
     try:
         grounded = GroundedDraft.model_validate_json(response.content)
     except ValidationError:
@@ -374,7 +381,12 @@ async def verify_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
 
 @node("retry_or_revise")
 async def retry_or_revise(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
-    kind = "verification" if state.get("verification") == "unsupported" else "citations"
+    if state.get("verification") == "unsupported":
+        kind = "verification"
+    elif state.get("draft") is None:
+        kind = "invalid_output"
+    else:
+        kind = "citations"
     try:
         deps.harness.consume_correction(deps.ctx, kind)
     except BudgetExhaustedError:

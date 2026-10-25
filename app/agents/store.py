@@ -2,16 +2,16 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agents.result import AgentRunResult
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.core.execution_context import ExecutionContext
-from app.db.models import AgentExecution, ExecutionEvent
+from app.db.models import AgentExecution, Approval, ExecutionEvent
 
 
 class ExecutionStore:
@@ -97,3 +97,72 @@ class ExecutionStore:
                 .order_by(ExecutionEvent.seq)
             )
             return list(rows)
+
+
+class ApprovalStore:
+    """Pending human decisions. The pending -> decided transition is a single conditional
+    UPDATE, so two concurrent approvals of the same call cannot both resume the run."""
+
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def create(
+        self, tenant_id: str, execution_id: uuid.UUID, payload: dict[str, Any]
+    ) -> Approval:
+        async with self._sessions() as session, session.begin():
+            row: Approval | None = await session.scalar(
+                insert(Approval)
+                .values(
+                    id=uuid.uuid4(),
+                    execution_id=execution_id,
+                    tenant_id=tenant_id,
+                    call_id=payload["call_id"],
+                    tool_name=payload["tool"],
+                    arguments=payload["arguments"],
+                    status="pending",
+                )
+                # Re-saving the same paused state must not create a second approval.
+                .on_conflict_do_update(
+                    constraint="uq_approvals_execution_call", set_={"call_id": payload["call_id"]}
+                )
+                .returning(Approval)
+            )
+            assert row is not None
+            return row
+
+    async def list(self, tenant_id: str, status: str | None, limit: int = 50) -> list[Approval]:
+        query = select(Approval).where(Approval.tenant_id == tenant_id)
+        if status:
+            query = query.where(Approval.status == status)
+        async with self._sessions() as session:
+            rows = await session.scalars(query.order_by(Approval.created_at.desc()).limit(limit))
+            return list(rows)
+
+    async def decide(
+        self, tenant_id: str, approval_id: uuid.UUID, *, approved: bool, reason: str | None
+    ) -> Approval:
+        async with self._sessions() as session, session.begin():
+            row: Approval | None = await session.scalar(
+                update(Approval)
+                .where(
+                    Approval.id == approval_id,
+                    Approval.tenant_id == tenant_id,
+                    Approval.status == "pending",
+                )
+                .values(
+                    status="approved" if approved else "rejected",
+                    reason=reason,
+                    decided_at=datetime.now(UTC),
+                )
+                .returning(Approval)
+            )
+            if row is not None:
+                return row
+            exists = await session.scalar(
+                select(Approval.status).where(
+                    Approval.id == approval_id, Approval.tenant_id == tenant_id
+                )
+            )
+        if exists is None:
+            raise NotFoundError("Approval not found")
+        raise ConflictError(f"Approval already {exists}")

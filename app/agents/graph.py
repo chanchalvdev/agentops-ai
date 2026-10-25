@@ -16,7 +16,6 @@ When to use what:
 
 import logging
 import uuid
-from collections.abc import AsyncIterator
 from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -107,30 +106,21 @@ class GraphRunner:
         return await self._invoke(ctx, initial)
 
     async def resume(
-        self, ctx: ExecutionContext, *, approved: bool, reason: str | None = None
+        self,
+        ctx: ExecutionContext,
+        *,
+        approved: bool,
+        reason: str | None = None,
+        call_id: str | None = None,
     ) -> AgentRunResult:
+        """Resume a paused run. Pass a context from restore_context(): the original in-memory
+        one still counts the human's wait against the deadline. Callers must ensure a single
+        resume per decision (AgentService claims the approval row first)."""
         state = await self.graph.aget_state(self._config(ctx))
         if not state.interrupts:
             raise ConflictError("Execution is not waiting for approval")
-        return await self._invoke(ctx, Command(resume={"approved": approved, "reason": reason}))
-
-    async def stream(
-        self, ctx: ExecutionContext, question: str
-    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        """Yield (node name, update) as each node finishes, then ("result", AgentRunResult)."""
-        self.for_graph(ctx)
-        initial: AgentState = {
-            "execution_id": str(ctx.execution_id),
-            "request_id": ctx.request_id,
-            "question": question,
-        }
-        async for chunk in self.graph.astream(
-            initial, self._config(ctx), context=self._deps(ctx), stream_mode="updates"
-        ):
-            for name, update in chunk.items():
-                if name != "__interrupt__":
-                    yield name, {k: v for k, v in (update or {}).items() if k != "budget"}
-        yield "result", (await self.result(ctx)).model_dump(mode="json")
+        decision = {"approved": approved, "reason": reason, "call_id": call_id}
+        return await self._invoke(ctx, Command(resume=decision))
 
     async def _invoke(self, ctx: ExecutionContext, payload: Any) -> AgentRunResult:
         try:

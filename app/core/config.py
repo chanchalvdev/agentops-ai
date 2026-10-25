@@ -64,9 +64,9 @@ class Settings(BaseSettings):
         default=None, gt=0
     )  # None = no monetary cap (local models cost $0)
     agent_deadline_s: float = Field(default=180.0, gt=0, le=900)
-    # History budget for the agent prompt (~4 chars/token), leaving room for tools and output.
     # Where paused graph runs are persisted. "memory" loses pending approvals on restart.
     agent_checkpointer: Literal["postgres", "memory"] = "postgres"
+    # History budget for the agent prompt (~4 chars/token), leaving room for tools and output.
     agent_max_context_chars: int = Field(default=20_000, ge=2000)
 
     @model_validator(mode="after")

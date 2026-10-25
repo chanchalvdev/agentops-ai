@@ -71,13 +71,60 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 
 ---
 
-## Day 2 — Harness + custom loop + LangGraph (Thu 22 Oct)
-- [ ] Execution context, budgets, typed harness errors, policy gate
-- [ ] Tool interface + registry; document_search, calculator (safe AST), document_metadata
-- [ ] Custom agent loop (FINAL | TOOL_CALLS, ≤8 steps) + execution ledger
-- [ ] LangGraph workflow, checkpointing, human_approval interrupt/resume
-- [ ] SSE streaming, approvals API, executions API
-- [ ] Recorder agent run
+## Day 2 — Harness + custom loop + LangGraph (done Sun 25 Oct, branch `day-2-harness-loop-graph`)
+
+### Harness (M1)
+- [x] `ExecutionContext`: ids, tenant, limits, counters, permissions, cancel flag, ledger, listeners
+- [x] `ExecutionLimits` from settings; request overrides only tighten; unknown keys / non-positive cost rejected
+- [x] Policy gate before every model/tool call: cancellation → deadline → budget → permission → arguments
+- [x] Hard deadline via `asyncio.timeout`; output tokens capped to remaining budget; unknown cost fails closed
+- [x] Typed errors: budget, deadline, cancelled, not permitted, approval required, invalid args, tool failure/timeout, verification
+- [x] Bounded corrections per failure kind; only idempotent tools retried; every attempt in the ledger
+- [x] All seven §5 demonstrations tested (`tests/unit/test_harness.py`)
+
+### Tools (M2)
+- [x] Tool interface (schemas, permissions, timeout, idempotency, approval) + registry/allowlist
+- [x] `calculator` (AST allowlist, no eval, exponent/magnitude/depth/length caps)
+- [x] `document_search` (hybrid retrieval, tenant from context, `top_k` floor 3 after a live miss)
+- [x] `document_metadata` (ownership enforced: other tenants' IDs are "not found")
+
+### Custom loop (M3)
+- [x] FINAL (`final_answer` tool or JSON) | TOOL_CALLS; prose never executed; ≤8 steps
+- [x] Repeated identical successful calls refused; failed calls may be retried
+- [x] Evidence store: stable S#/T# labels, per-document dedupe, fenced + escaped untrusted text
+- [x] Bounded history that never splits a tool call from its results; Ollama `num_ctx` set explicitly
+- [x] Migration 0002 (`agent_executions`, `execution_events`, `approvals`), idempotent ledger writes
+- [x] `mark_for_reindex` atomic conditional UPDATE (Day 1 deferral)
+
+### LangGraph (M4)
+- [x] 10 nodes, 5 kinds of conditional edges, every node a harness step
+- [x] Postgres checkpointer; budget snapshot restored on resume (pause time excluded from deadline)
+- [x] `human_approval` interrupt/resume; rejected calls never execute
+- [x] `verify_answer` entailment check (Day 1 deferral) — on qwen3:8b after a probe showed 1.7b has no signal
+- [x] Answer schema field order (evidence → citations → answer) and replayed-draft corrections, both from live failures
+
+### API + CLI (M5)
+- [x] `POST /agent/run`, `POST /agent/run/stream` (SSE), executions + trace, approvals list/approve/reject
+- [x] Every exit path persists the execution (incl. client disconnect → `cancelled`)
+- [x] Concurrent approvals resume exactly once (conditional UPDATE; tested with 4 parallel requests)
+- [x] `agentops run --mode graph|loop --trace`
+
+### Verification
+- [x] 227 tests (unit + integration on Postgres), `-W error`, ruff, mypy strict clean
+- [x] Live qwen3:8b: graph 4/4 (RPO 5 min = 300 s verified; out-of-scope → insufficient_evidence); CLI RTO run answered + verified
+- [~] Live loop: grounded 4/4, complete 2/4 (omitted the seconds conversion twice) → Day 3 eval case
+- [x] Recorder agent: journals/interviews 02 (harness+tools), 03 (loop), 04 (graph), 05 (API)
+- [x] Recorder reviews found 39 issues across M1–M4; the cheap/important ones were fixed with regression tests (see commit messages)
+
+### Deferred (tracked)
+- [ ] Router-internal retries and failed calls do not count tokens against the budget → Day 4
+- [ ] History trimming can drop a turn whose S# is still citable → Day 4 context work
+- [ ] Approval expiry/notification; claimed approval whose resume fails stays "approved" → Day 4 hardening
+- [ ] Checkpoints copy the full ledger at every node and keep passage text / tool arguments; no cleanup after a run → Day 4
+- [ ] An approved write that crashes before its checkpoint is replayed on recovery (no idempotency key) → Day 3 workspace tools
+- [ ] Graph answer prompt has no total evidence cap (fits 8k today: ≤15 passages × 1.5 KB) → Day 4
+- [ ] `insufficient_evidence` drafts return model text unverified; verifier output that fails to parse is reported as `unavailable`, not blocked → decide with Day 3 eval data
+- [ ] Model calls are slow under memory pressure (other containers + 8b at 8k ctx) → Day 4 routing/caching
 
 ## Day 3 — Workspace tools + observability + evaluation (Fri 23 Oct)
 ## Day 4 — Optimization, drift, hardening (Sat 24 Oct)

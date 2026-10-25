@@ -18,7 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.agents.custom_loop import AgentLoop
 from app.agents.graph import GraphRunner
 from app.agents.harness import Harness
-from app.agents.store import ExecutionStore
+from app.agents.service import AgentService
+from app.agents.store import ApprovalStore, ExecutionStore
+from app.core.budgets import ExecutionLimits
 from app.core.config import Settings
 from app.core.security import ApiKeyAuthenticator
 from app.db.session import make_engine, make_sessionmaker
@@ -56,6 +58,8 @@ class Services:
     harness: Harness
     agent_loop: AgentLoop
     executions: ExecutionStore
+    approvals: ApprovalStore
+    agents: AgentService
     _graph: GraphRunner | None = None
     _pool: AsyncConnectionPool[Any] | None = None
 
@@ -81,7 +85,12 @@ class Services:
             )
             await self._pool.open()
             postgres_saver = AsyncPostgresSaver(self._pool)
-            await postgres_saver.setup()  # idempotent; manages its own schema versions
+            try:
+                await postgres_saver.setup()  # idempotent; manages its own schema versions
+            except Exception:
+                await self._pool.close()
+                self._pool = None
+                raise
             saver = postgres_saver
         else:
             saver = InMemorySaver()
@@ -142,7 +151,22 @@ def build_services(
     ingestion = IngestionService(sessions, embedder, settings)
     tools = ToolRegistry([DocumentSearch(retriever), Calculator(), DocumentMetadata(ingestion)])
     harness = Harness(llm, tools)
-    return Services(
+    agent_loop = AgentLoop(
+        harness,
+        max_context_chars=settings.agent_max_context_chars,
+        max_output_tokens=settings.llm_max_output_tokens,
+    )
+    executions, approvals = ExecutionStore(sessions), ApprovalStore(sessions)
+    services: Services
+    agents = AgentService(
+        agent_loop,
+        lambda: services.graph,  # the graph exists only after the async start()
+        tools,
+        executions,
+        approvals,
+        ExecutionLimits.from_settings(settings),
+    )
+    services = Services(
         settings=settings,
         engine=engine,
         sessions=sessions,
@@ -161,10 +185,9 @@ def build_services(
         ),
         tools=tools,
         harness=harness,
-        agent_loop=AgentLoop(
-            harness,
-            max_context_chars=settings.agent_max_context_chars,
-            max_output_tokens=settings.llm_max_output_tokens,
-        ),
-        executions=ExecutionStore(sessions),
+        agent_loop=agent_loop,
+        executions=executions,
+        approvals=approvals,
+        agents=agents,
     )
+    return services
