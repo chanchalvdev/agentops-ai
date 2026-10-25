@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.agents.harness import Harness
 from app.core.config import Settings
 from app.core.security import ApiKeyAuthenticator
 from app.db.session import make_engine, make_sessionmaker
@@ -24,6 +25,10 @@ from app.llm.provider import (
 )
 from app.rag.answer import Answerer
 from app.retrieval.hybrid_search import HybridRetriever
+from app.tools.calculator import Calculator
+from app.tools.document_metadata import DocumentMetadata
+from app.tools.document_search import DocumentSearch
+from app.tools.registry import ToolRegistry
 
 
 @dataclass
@@ -38,6 +43,8 @@ class Services:
     ingestion: IngestionService
     retriever: HybridRetriever
     answerer: Answerer
+    tools: ToolRegistry
+    harness: Harness
 
     async def aclose(self) -> None:
         await self.http.aclose()
@@ -87,6 +94,8 @@ def build_services(
     retriever = HybridRetriever(
         sessions, embedder, candidate_k=settings.retrieval_candidate_k, rrf_k=settings.rrf_k
     )
+    ingestion = IngestionService(sessions, embedder, settings)
+    tools = ToolRegistry([DocumentSearch(retriever), Calculator(), DocumentMetadata(ingestion)])
     return Services(
         settings=settings,
         engine=engine,
@@ -95,7 +104,7 @@ def build_services(
         auth=ApiKeyAuthenticator(settings),
         embedder=embedder,
         llm=llm,
-        ingestion=IngestionService(sessions, embedder, settings),
+        ingestion=ingestion,
         retriever=retriever,
         answerer=Answerer(
             retriever,
@@ -104,4 +113,6 @@ def build_services(
             max_output_tokens=settings.llm_max_output_tokens,
             timeout_s=settings.llm_timeout_s,
         ),
+        tools=tools,
+        harness=Harness(llm, tools),
     )
