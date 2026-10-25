@@ -47,6 +47,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         owned = services is None
         app.state.services = services or build_services(settings)
+        await app.state.services.start()
         logger.info(
             "startup",
             extra={

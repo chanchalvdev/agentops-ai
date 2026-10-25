@@ -37,6 +37,12 @@ class ToolReference(BaseModel):
     output: dict[str, Any]
 
 
+def _text_key(p: dict[str, Any]) -> str:
+    # Same text in two different documents (e.g. v1 and v2 sharing a paragraph) stays two
+    # sources: merging them would make a "latest version" answer cite only the older document.
+    return f"{p['document_id']}:{' '.join(str(p['text']).split()).lower()}"
+
+
 class EvidenceStore:
     def __init__(self, max_passage_chars: int = 1500) -> None:
         self._max_chars = max_passage_chars
@@ -53,10 +59,11 @@ class EvidenceStore:
         """Register passages; returns (new labels, labels of passages already seen)."""
         new, seen = [], []
         for p in passages:
-            text_key = " ".join(str(p["text"]).split()).lower()
+            text_key = _text_key(p)
             label = self._label_by_chunk.get(p["chunk_id"]) or self._label_by_text.get(text_key)
             if label:
-                seen.append(label)
+                if label not in new:
+                    seen.append(label)
                 continue
             label = f"S{len(self.passages) + 1}"
             self.passages[label] = p
@@ -116,6 +123,24 @@ class EvidenceStore:
     def references(self, labels: list[str]) -> list[ToolReference]:
         return [self.tool_results[label] for label in labels if label in self.tool_results]
 
+    def to_state(self) -> dict[str, Any]:
+        """JSON-safe snapshot for a LangGraph checkpoint."""
+        return {
+            "passages": self.passages,
+            "tool_results": {k: v.model_dump(mode="json") for k, v in self.tool_results.items()},
+        }
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any] | None) -> "EvidenceStore":
+        store = cls()
+        for label, p in (state or {}).get("passages", {}).items():
+            store.passages[label] = p
+            store._label_by_chunk[p["chunk_id"]] = label
+            store._label_by_text[_text_key(p)] = label
+        for label, ref in (state or {}).get("tool_results", {}).items():
+            store.tool_results[label] = ToolReference.model_validate(ref)
+        return store
+
 
 def cited_labels(answer: FinalAnswer) -> list[str]:
     return list(dict.fromkeys([*answer.citations, *CITATION_MARKER.findall(answer.answer)]))
@@ -135,12 +160,22 @@ def validate_final(answer: FinalAnswer, store: EvidenceStore) -> list[str]:
     return errors
 
 
+_THINK = re.compile(r"^\s*<think>.*?</think>", re.S)
+_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.S)
+
+
+def _strip_wrapping(content: str) -> str:
+    content = _THINK.sub("", content)
+    match = _FENCE.match(content)
+    return match.group(1) if match else content.strip()
+
+
 def parse_final(arguments: dict[str, Any] | None, content: str) -> FinalAnswer:
     """FINAL comes from final_answer tool arguments, or JSON content as a fallback."""
     try:
         if arguments is not None:
             return FinalAnswer.model_validate(arguments)
-        return FinalAnswer.model_validate_json(content)
+        return FinalAnswer.model_validate_json(_strip_wrapping(content))
     except ValidationError as exc:
         fields = "; ".join(
             f"{'.'.join(map(str, e['loc'])) or 'answer'}: {e['type']}" for e in exc.errors()

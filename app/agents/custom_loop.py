@@ -21,6 +21,7 @@ from app.core.errors import (
 )
 from app.core.execution_context import ExecutionContext
 from app.llm.schemas import LLMRequest, LLMResponse, Message, ToolCall, ToolSpec
+from app.rag.answer import escape_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,14 @@ class AgentLoop:
             return await self._run(ctx, question, store)
         except AppError as exc:
             status = status_for_error(exc)
-            if isinstance(exc, ApprovalRequiredError):
-                status = "awaiting_approval"
-            ctx.record("final", "loop", "error", error_code=exc.code, message=exc.message)
+            ctx.record(
+                "final",
+                "loop",
+                "error",
+                error_code=exc.code,
+                message=exc.message,
+                data={"status": status, "prompt_version": PROMPT_VERSION},
+            )
             if status == "failed":
                 logger.warning("agent loop failed", extra={"code": exc.code, "detail": exc.detail})
             return build_result(ctx, "loop", store, status, error=exc)
@@ -93,6 +99,12 @@ class AgentLoop:
     async def _run(
         self, ctx: ExecutionContext, question: str, store: EvidenceStore
     ) -> AgentRunResult:
+        # The loop cannot pause for a human, so approval-required tools are graph-only.
+        ctx.allowed_tools = frozenset(
+            name
+            for name in ctx.allowed_tools
+            if (tool := self.harness.tools.get(name)) and not tool.requires_approval
+        )
         tools = [*self.harness.tools.specs(ctx.allowed_tools), _final_spec()]
         messages = [
             Message(role="system", content=SYSTEM_PROMPT),
@@ -154,7 +166,9 @@ class AgentLoop:
                 "insufficient_evidence" if final.insufficient_evidence else "answered"
             )
             ctx.workflow_state = status
-            ctx.record("final", "loop", "ok", data={"status": status})
+            ctx.record(
+                "final", "loop", "ok", data={"status": status, "prompt_version": PROMPT_VERSION}
+            )
             return build_result(ctx, "loop", store, status, final=final)
 
         kind = "invalid_output" if final is None else "citations"
@@ -162,9 +176,16 @@ class AgentLoop:
             self.harness.consume_correction(ctx, kind)
         except BudgetExhaustedError as exc:
             ctx.record(
-                "final", "loop", "error", error_code="failed_validation", message=exc.message
+                "final",
+                "loop",
+                "error",
+                error_code="failed_validation",
+                message=exc.message,
+                data={"status": "failed_validation", "prompt_version": PROMPT_VERSION},
             )
-            return build_result(ctx, "loop", store, "failed_validation", final=final, error=exc)
+            return build_result(
+                ctx, "loop", store, "failed_validation", final=final, error_code="failed_validation"
+            )
         feedback = (
             "Your previous reply was rejected: "
             + "; ".join(problems)
@@ -188,14 +209,17 @@ class AgentLoop:
             self.harness.consume_correction(ctx, "repeated_tool_call")
             content = "Duplicate call with identical arguments; the result is already above."
         else:
-            seen.add(signature)
             try:
                 outcome = await self.harness.call_tool(ctx, call)
             except TERMINAL:
                 raise
             except AppError as exc:
-                content = f'<tool_error code="{exc.code}">{exc.message}</tool_error>'
+                # 12: messages can echo model-chosen names, so they are escaped like evidence
+                content = (
+                    f'<tool_error code="{exc.code}">{escape_untrusted(exc.message)}</tool_error>'
+                )
             else:
+                seen.add(signature)  # 3: only a successful result makes a repeat pointless
                 if outcome.name == "document_search":
                     new, already = store.add_passages(outcome.output["passages"])
                     content = store.render_passages(new, already)

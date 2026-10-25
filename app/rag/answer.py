@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "rag-answer-v1"
 _CITATION_MARKER = re.compile(r"\[(S\d+)\]")
-_FENCE_BREAKOUT = re.compile(r"</?\s*(source|evidence)\b", re.I)
+_FENCE_BREAKOUT = re.compile(r"</?\s*(source|evidence|tool_result|tool_error)\b", re.I)
 
 SYSTEM_PROMPT = """You answer questions using ONLY the evidence sources provided.
 

@@ -55,6 +55,7 @@ class Settings(BaseSettings):
 
     # Agent execution limits (defaults for ExecutionLimits; a request may only tighten them)
     agent_max_steps: int = Field(default=8, ge=1, le=50)
+    agent_max_graph_steps: int = Field(default=20, ge=1, le=100)
     agent_max_model_calls: int = Field(default=12, ge=1, le=100)
     agent_max_tool_calls: int = Field(default=10, ge=0, le=100)
     agent_max_corrections: int = Field(default=2, ge=0, le=5)
@@ -64,6 +65,8 @@ class Settings(BaseSettings):
     )  # None = no monetary cap (local models cost $0)
     agent_deadline_s: float = Field(default=180.0, gt=0, le=900)
     # History budget for the agent prompt (~4 chars/token), leaving room for tools and output.
+    # Where paused graph runs are persisted. "memory" loses pending approvals on restart.
+    agent_checkpointer: Literal["postgres", "memory"] = "postgres"
     agent_max_context_chars: int = Field(default=20_000, ge=2000)
 
     @model_validator(mode="after")

@@ -130,6 +130,7 @@ async def services(
     )
     async with svc.engine.begin() as conn:
         await conn.execute(text("TRUNCATE documents, agent_executions CASCADE"))
+    await svc.start()
     yield svc
     await svc.aclose()
 

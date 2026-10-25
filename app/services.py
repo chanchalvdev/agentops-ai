@@ -5,11 +5,18 @@ production code.
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.agents.custom_loop import AgentLoop
+from app.agents.graph import GraphRunner
 from app.agents.harness import Harness
 from app.agents.store import ExecutionStore
 from app.core.config import Settings
@@ -49,8 +56,42 @@ class Services:
     harness: Harness
     agent_loop: AgentLoop
     executions: ExecutionStore
+    _graph: GraphRunner | None = None
+    _pool: AsyncConnectionPool[Any] | None = None
+
+    @property
+    def graph(self) -> GraphRunner:
+        if self._graph is None:
+            raise RuntimeError("Services.start() has not been awaited")
+        return self._graph
+
+    async def start(self) -> None:
+        """Open async resources that cannot be created in a sync constructor."""
+        if self._graph is not None:
+            return
+        saver: BaseCheckpointSaver[Any]
+        if self.settings.agent_checkpointer == "postgres":
+            # The checkpointer speaks psycopg 3, not asyncpg; same database, its own tables.
+            conninfo = self.settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+            self._pool = AsyncConnectionPool(
+                conninfo,
+                max_size=5,
+                open=False,
+                kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+            )
+            await self._pool.open()
+            postgres_saver = AsyncPostgresSaver(self._pool)
+            await postgres_saver.setup()  # idempotent; manages its own schema versions
+            saver = postgres_saver
+        else:
+            saver = InMemorySaver()
+        self._graph = GraphRunner(
+            self.harness, saver, max_output_tokens=self.settings.llm_max_output_tokens
+        )
 
     async def aclose(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
         await self.http.aclose()
         await self.engine.dispose()
 

@@ -29,6 +29,7 @@ async def live_services(database: str) -> AsyncIterator[Services]:
     except httpx.HTTPError:
         pytest.skip("Ollama is not running")
     svc = build_services(settings)
+    await svc.start()
     async with svc.engine.begin() as conn:
         await conn.execute(text("TRUNCATE documents, agent_executions CASCADE"))
     for path in sorted(CORPUS.glob("*.md")):
@@ -47,6 +48,7 @@ def show(result: object) -> None:
     print("  ->", result.status, "|", result.answer)  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize("mode", ["loop", "graph"])
 @pytest.mark.parametrize(
     ("question", "expect_status", "expect_in_answer", "expect_files"),
     [
@@ -59,8 +61,9 @@ def show(result: object) -> None:
         ("What is the CEO's favourite colour?", "insufficient_evidence", None, set()),
     ],
 )
-async def test_loop_live(
+async def test_agent_live(
     live_services: Services,
+    mode: str,
     question: str,
     expect_status: str,
     expect_in_answer: str | None,
@@ -71,10 +74,12 @@ async def test_loop_live(
         limits=ExecutionLimits.from_settings(live_services.settings),
         allowed_tools=live_services.tools.names,
     )
-    await live_services.executions.start(ctx, "loop", question)
-    result = await live_services.agent_loop.run(ctx, question)
+    await live_services.executions.start(ctx, mode, question)  # type: ignore[arg-type]
+    runner = live_services.agent_loop if mode == "loop" else live_services.graph
+    result = await runner.run(ctx, question)
     await live_services.executions.save(ctx, result)
-    print(f"\n{question}  ({result.total_ms / 1000:.1f}s, {result.usage.total_tokens} tokens)")
+    seconds, tokens = result.total_ms / 1000, result.usage.total_tokens
+    print(f"\n[{mode}] {question}  ({seconds:.1f}s, {tokens} tokens)")
     show(result)
     assert result.status == expect_status
     if expect_in_answer:

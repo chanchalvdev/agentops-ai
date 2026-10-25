@@ -21,6 +21,8 @@ class ExecutionLimits(BaseModel):
     max_total_tokens: int = Field(default=48_000, ge=1)
     max_cost_usd: Decimal | None = Field(default=None, gt=0)
     deadline_s: float = Field(default=180.0, gt=0)
+    # The graph runs more, smaller nodes than the loop has turns, so it gets its own step limit.
+    max_graph_steps: int = Field(default=20, ge=1)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "ExecutionLimits":
@@ -32,6 +34,7 @@ class ExecutionLimits(BaseModel):
             max_total_tokens=settings.agent_max_total_tokens,
             max_cost_usd=settings.agent_max_cost_usd,
             deadline_s=settings.agent_deadline_s,
+            max_graph_steps=settings.agent_max_graph_steps,
         )
 
     def tightened(self, **overrides: object) -> "ExecutionLimits":

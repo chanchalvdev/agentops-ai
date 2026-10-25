@@ -47,6 +47,8 @@ class AgentRunResult(BaseModel):
     citations: list[Citation]
     tool_references: list[ToolReference]
     error_code: str | None = None
+    # graph only: supported | unsupported | skipped | unavailable (verifier gave no usable output)
+    verification: str | None = None
     steps: int
     model_calls: int
     tool_calls: int
@@ -74,6 +76,8 @@ def build_result(
     status: RunStatus,
     final: FinalAnswer | None = None,
     error: AppError | None = None,
+    error_code: str | None = None,
+    verification: str | None = None,
 ) -> AgentRunResult:
     labels = cited_labels(final) if final and status == "answered" else []
     answer = final.answer if final and status in ("answered", "insufficient_evidence") else None
@@ -86,7 +90,8 @@ def build_result(
         answer=answer or FALLBACK_TEXT.get(status, ""),
         citations=store.citations(labels),
         tool_references=store.references(labels),
-        error_code=error.code if error else None,
+        error_code=error.code if error else error_code,
+        verification=verification,
         steps=counters.steps,
         model_calls=counters.model_calls,
         tool_calls=counters.tool_calls,
