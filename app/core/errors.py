@@ -80,3 +80,46 @@ class EmbeddingError(AppError):
 
 class RetrievalError(AppError):
     code, status_code = "retrieval_error", 500
+
+
+# --- Harness / agent errors ------------------------------------------------------------------
+# Policy errors (budget, deadline, cancellation, permission) end the execution. Tool argument and
+# tool execution errors are reported back to the model, which may correct itself within budget.
+
+
+class BudgetExhaustedError(AppError):
+    code, status_code = "budget_exhausted", 429
+
+
+class DeadlineExceededError(AppError):
+    code, status_code = "deadline_exceeded", 504
+
+
+class ExecutionCancelledError(AppError):
+    code, status_code = "execution_cancelled", 409
+
+
+class ToolPermissionError(AppError):
+    code, status_code = "tool_not_permitted", 403
+
+
+class ApprovalRequiredError(AppError):
+    """The tool call is valid but must wait for a human decision before it runs."""
+
+    code, status_code = "approval_required", 409
+
+
+class InvalidToolArgumentsError(AppError):
+    code, status_code = "invalid_tool_arguments", 422
+
+
+class ToolExecutionError(AppError):
+    code, status_code = "tool_execution_failed", 502
+
+
+class ToolTimeoutError(ToolExecutionError):
+    code, status_code, transient = "tool_timeout", 504, True
+
+
+class VerificationError(AppError):
+    code, status_code = "verification_failed", 422

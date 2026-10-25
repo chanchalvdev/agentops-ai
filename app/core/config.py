@@ -1,5 +1,6 @@
 """Application settings, loaded from environment variables (prefix AGENTOPS_) or a .env file."""
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
@@ -49,6 +50,15 @@ class Settings(BaseSettings):
     retrieval_candidate_k: int = Field(default=30, ge=1, le=200)
     rrf_k: int = Field(default=60, ge=1)
     max_evidence_chars: int = Field(default=8000, ge=500)
+
+    # Agent execution limits (defaults for ExecutionLimits; a request may only tighten them)
+    agent_max_steps: int = Field(default=8, ge=1, le=50)
+    agent_max_model_calls: int = Field(default=12, ge=1, le=100)
+    agent_max_tool_calls: int = Field(default=10, ge=0, le=100)
+    agent_max_corrections: int = Field(default=2, ge=0, le=5)
+    agent_max_total_tokens: int = Field(default=48_000, ge=1)
+    agent_max_cost_usd: Decimal | None = None  # None = no monetary cap (local models cost $0)
+    agent_deadline_s: float = Field(default=180.0, gt=0, le=900)
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":

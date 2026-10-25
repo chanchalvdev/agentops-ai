@@ -6,7 +6,9 @@ services:
       POSTGRES_PASSWORD: agentops
       POSTGRES_DB: agentops
     ports:
-      - "5433:5432" # 5433 on the host so it never collides with a locally installed Postgres
+      # 5433 on the host so it never collides with a locally installed Postgres; override with
+      # AGENTOPS_DB_PORT when another project already holds it.
+      - "${AGENTOPS_DB_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
