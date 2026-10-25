@@ -8,6 +8,7 @@ is applied identically to every provider.
 import json
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -77,8 +78,12 @@ class OllamaProvider:
 
     name = "ollama"
 
-    def __init__(self, client: httpx.AsyncClient, base_url: str) -> None:
+    def __init__(
+        self, client: httpx.AsyncClient, base_url: str, num_ctx: int | None = None
+    ) -> None:
         self._client, self._base = client, base_url.rstrip("/")
+        # Ollama silently truncates prompts longer than its context window, so set it explicitly.
+        self._num_ctx = num_ctx
 
     @staticmethod
     def _message(m: Message) -> dict[str, Any]:
@@ -102,6 +107,8 @@ class OllamaProvider:
                 "num_predict": request.max_output_tokens,
             },
         }
+        if self._num_ctx:
+            payload["options"]["num_ctx"] = self._num_ctx
         if request.tools:
             payload["tools"] = _tool_payload(request)
         if request.json_schema:
@@ -113,12 +120,16 @@ class OllamaProvider:
         latency_ms = (time.perf_counter() - start) * 1000
         msg = data.get("message") or {}
         calls = []
-        for i, call in enumerate(msg.get("tool_calls") or []):
+        for call in msg.get("tool_calls") or []:
             fn = call.get("function") or {}
             args = fn.get("arguments")
+            if args is None:  # zero-argument tools
+                args = {}
             calls.append(
                 ToolCall(
-                    id=call.get("id") or f"call_{i}",
+                    # Ollama sends no call IDs; make them unique per execution, because approvals
+                    # and ledger entries are keyed by them.
+                    id=call.get("id") or f"call_{uuid.uuid4().hex[:12]}",
                     name=fn.get("name", ""),
                     arguments=args if isinstance(args, dict) else {},
                     raw_arguments=None if isinstance(args, dict) else str(args),

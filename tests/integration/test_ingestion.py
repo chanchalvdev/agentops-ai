@@ -134,3 +134,19 @@ async def test_delete_cascades_and_is_tenant_scoped(services: Services, ingest: 
     assert await chunk_count(services, doc.id) == 0
     with pytest.raises(NotFoundError):
         await services.ingestion.get("tenant_a", doc.id)
+
+
+async def test_concurrent_reindex_requests_claim_the_document_once(
+    services: Services, ingest: Callable[..., Any]
+) -> None:
+    import asyncio
+
+    from app.core.errors import ConflictError
+
+    doc = await ingest("race.md", "# Race\n\nsome text to index")
+    results = await asyncio.gather(
+        *(services.ingestion.mark_for_reindex("tenant_a", doc.id) for _ in range(5)),
+        return_exceptions=True,
+    )
+    assert sum(not isinstance(r, Exception) for r in results) == 1
+    assert sum(isinstance(r, ConflictError) for r in results) == 4

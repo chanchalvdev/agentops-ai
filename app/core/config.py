@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     llm_timeout_s: float = 120.0
     llm_max_retries: int = Field(default=1, ge=0, le=3)
     llm_max_output_tokens: int = 1024
+    # Context window requested from Ollama. 8k fits qwen3:8b comfortably in 16 GB unified memory.
+    llm_num_ctx: int = Field(default=8192, ge=2048, le=40960)
     # Optional OpenAI-compatible fallback (Groq, OpenRouter, OpenAI...); off unless all 3 are set.
     fallback_base_url: str | None = None
     fallback_api_key: SecretStr | None = None
@@ -57,8 +59,12 @@ class Settings(BaseSettings):
     agent_max_tool_calls: int = Field(default=10, ge=0, le=100)
     agent_max_corrections: int = Field(default=2, ge=0, le=5)
     agent_max_total_tokens: int = Field(default=48_000, ge=1)
-    agent_max_cost_usd: Decimal | None = None  # None = no monetary cap (local models cost $0)
+    agent_max_cost_usd: Decimal | None = Field(
+        default=None, gt=0
+    )  # None = no monetary cap (local models cost $0)
     agent_deadline_s: float = Field(default=180.0, gt=0, le=900)
+    # History budget for the agent prompt (~4 chars/token), leaving room for tools and output.
+    agent_max_context_chars: int = Field(default=20_000, ge=2000)
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":

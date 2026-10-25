@@ -217,3 +217,16 @@ def test_cost_local_is_zero_and_unknown_hosted_is_unavailable() -> None:
     assert local.cost_usd == Decimal(0) and local.pricing_source == "local"
     hosted = estimate_cost("openai_compatible", "unknown-model", usage)
     assert hosted.cost_usd is None and hosted.pricing_source == "unavailable"
+
+
+async def test_ollama_tool_call_ids_are_unique_and_null_arguments_mean_empty() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls = [{"function": {"name": "t", "arguments": None}}] * 2
+        return httpx.Response(
+            200, json={"message": {"content": "", "tool_calls": calls}, "model": "m"}
+        )
+
+    resp = await ollama_with(httpx.MockTransport(handler)).chat(REQ)
+    ids = [c.id for c in resp.tool_calls]
+    assert len(set(ids)) == 2
+    assert all(c.arguments == {} and c.raw_arguments is None for c in resp.tool_calls)

@@ -390,3 +390,53 @@ async def test_ledger_records_successful_calls() -> None:
     assert [e.kind for e in ctx.ledger] == ["step", "model_call", "tool_call"]
     assert [e.seq for e in ctx.ledger] == [0, 1, 2]
     assert ctx.ledger[1].data["role"] == "main"
+
+
+# --- regressions from the Day 2 milestone review ----------------------------------------------
+
+
+async def test_exhausted_tool_budget_wins_over_argument_errors() -> None:
+    harness, _ = make_harness()
+    ctx = make_ctx(max_tool_calls=0)
+    with pytest.raises(BudgetExhaustedError):
+        await harness.call_tool(ctx, ToolCall(id="x", name="echo", arguments={}))
+
+
+async def test_deadline_inside_a_tool_is_recorded_once() -> None:
+    class DeadlineTool(Echo):
+        name = "slow"
+
+        async def run(self, args: EchoIn, ctx: ExecutionContext) -> EchoOut:
+            ctx.cancel("stop")  # trips the in-attempt check on any retry
+            raise ProviderUnavailableError("down")
+
+    harness, _ = make_harness(None, DeadlineTool())
+    ctx = make_ctx()
+    with pytest.raises(ExecutionCancelledError):
+        await harness.call_tool(ctx, call("slow"))
+    tool_events = [e for e in ctx.ledger if e.kind == "tool_call"]
+    assert len(tool_events) == 1 and tool_events[0].error_code == "execution_cancelled"
+
+
+async def test_output_tokens_capped_to_remaining_budget() -> None:
+    harness, _ = make_harness()
+    provider = harness.llm._routes["main"][0].provider
+    ctx = make_ctx(max_total_tokens=300)
+    await harness.call_model(ctx, "main", REQUEST.model_copy(update={"max_output_tokens": 1024}))
+    assert provider.requests[-1].max_output_tokens == 300  # type: ignore[attr-defined]
+
+
+async def test_pending_approval_records_arguments_for_the_reviewer() -> None:
+    harness, _ = make_harness(None, Writer())
+    ctx = make_ctx()
+    ctx.permissions = frozenset({"workspace:write"})
+    with pytest.raises(ApprovalRequiredError):
+        await harness.call_tool(ctx, call("writer", text="hello"))
+    assert ctx.ledger[-1].data["arguments"] == {"text": "hello", "times": 1}
+
+
+def test_limit_overrides_reject_unknown_keys_and_non_positive_cost() -> None:
+    with pytest.raises(ValueError, match="unknown"):
+        ExecutionLimits().tightened(bogus=1)
+    with pytest.raises(ValueError):
+        ExecutionLimits(max_cost_usd=Decimal(0))

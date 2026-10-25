@@ -23,7 +23,8 @@ class DocumentSearchInput(BaseModel):
     metadata: dict[str, MetadataValue] | None = Field(
         default=None, description='Optional exact-match labels, e.g. {"team": "payments"}.'
     )
-    top_k: int = Field(default=5, ge=1, le=10)
+    # Floor of 3: in a live run qwen3:8b chose top_k=1 and missed the passage it needed.
+    top_k: int = Field(default=5, ge=3, le=10)
 
 
 class Passage(BaseModel):

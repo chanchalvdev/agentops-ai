@@ -129,7 +129,7 @@ async def services(
         test_settings, embedder=FakeEmbedder(test_settings.embedding_dim), llm_provider=fake_llm
     )
     async with svc.engine.begin() as conn:
-        await conn.execute(text("TRUNCATE documents CASCADE"))
+        await conn.execute(text("TRUNCATE documents, agent_executions CASCADE"))
     yield svc
     await svc.aclose()
 

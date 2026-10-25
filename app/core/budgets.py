@@ -19,7 +19,7 @@ class ExecutionLimits(BaseModel):
     max_tool_calls: int = Field(default=10, ge=0)
     max_corrections: int = Field(default=2, ge=0)  # per failure kind, not per execution
     max_total_tokens: int = Field(default=48_000, ge=1)
-    max_cost_usd: Decimal | None = None
+    max_cost_usd: Decimal | None = Field(default=None, gt=0)
     deadline_s: float = Field(default=180.0, gt=0)
 
     @classmethod
@@ -37,6 +37,9 @@ class ExecutionLimits(BaseModel):
     def tightened(self, **overrides: object) -> "ExecutionLimits":
         """Apply request overrides, keeping each limit at or below the server default."""
         merged = self.model_dump()
+        unknown = set(overrides) - set(merged)
+        if unknown:
+            raise ValueError(f"unknown execution limits: {sorted(unknown)}")
         for key, value in overrides.items():
             if value is None:
                 continue

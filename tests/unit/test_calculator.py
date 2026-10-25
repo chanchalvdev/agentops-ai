@@ -61,3 +61,9 @@ def test_rejects_anything_but_arithmetic(expression: str) -> None:
 def test_resource_and_domain_limits(expression: str) -> None:
     with pytest.raises(InvalidToolArgumentsError):
         evaluate(expression)
+
+
+@pytest.mark.parametrize("expression", ["(10 ** 100) ** 4", "0 ** -1", "2.0 ** 99 ** 1 * 1e300"])
+def test_arithmetic_errors_are_argument_errors_not_crashes(expression: str) -> None:
+    with pytest.raises(InvalidToolArgumentsError):
+        evaluate(expression)

@@ -1,18 +1,21 @@
-"""ORM models. Day 1: documents and chunks; execution/eval tables arrive with their features."""
+"""ORM models. Day 1: documents and chunks. Day 2: agent executions, their events, approvals."""
 
 import enum
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    BigInteger,
     Computed,
     DateTime,
     Enum,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -112,3 +115,76 @@ class DocumentChunk(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+class AgentExecution(Base):
+    """One agent run. Counters and status are typed columns; only variable shapes are JSONB."""
+
+    __tablename__ = "agent_executions"
+    __table_args__ = (Index("ix_executions_tenant_created", "tenant_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    request_id: Mapped[str] = mapped_column(String(64))
+    mode: Mapped[str] = mapped_column(String(16))  # loop | graph
+    status: Mapped[str] = mapped_column(String(32))  # running | RunStatus
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str | None] = mapped_column(Text)
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    steps: Mapped[int] = mapped_column(Integer, default=0)
+    model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    total_ms: Mapped[float | None] = mapped_column()
+    limits: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExecutionEvent(Base):
+    """Ledger entries: decisions, tool names, safe arguments, outcomes. No prompts or secrets."""
+
+    __tablename__ = "execution_events"
+    __table_args__ = (UniqueConstraint("execution_id", "seq", name="uq_events_execution_seq"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    execution_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agent_executions.id", ondelete="CASCADE")
+    )
+    seq: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(16))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    message: Mapped[str | None] = mapped_column(Text)
+    latency_ms: Mapped[float | None] = mapped_column()
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Approval(Base):
+    """A paused tool call waiting for a human decision (LangGraph interrupt)."""
+
+    __tablename__ = "approvals"
+    __table_args__ = (
+        UniqueConstraint("execution_id", "call_id", name="uq_approvals_execution_call"),
+        Index("ix_approvals_tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    execution_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agent_executions.id", ondelete="CASCADE")
+    )
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    call_id: Mapped[str] = mapped_column(String(100))
+    tool_name: Mapped[str] = mapped_column(String(100))
+    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|approved|rejected
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

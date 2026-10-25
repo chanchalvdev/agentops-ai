@@ -59,17 +59,20 @@ class Harness:
         ctx.record(kind, name, "rejected", error_code=exc.code, message=exc.message)
         return exc
 
+    @staticmethod
+    def _inactive(ctx: ExecutionContext) -> AppError | None:
+        if ctx.cancelled:
+            return ExecutionCancelledError(ctx.cancel_reason or "cancelled")
+        if ctx.remaining_s() <= 0:
+            return DeadlineExceededError("Execution deadline exceeded")
+        return None
+
     def ensure_active(
         self, ctx: ExecutionContext, kind: EventKind = "policy", name: str = "check"
     ) -> None:
-        if ctx.cancelled:
-            raise self._reject(
-                ctx, kind, name, ExecutionCancelledError(ctx.cancel_reason or "cancelled")
-            )
-        if ctx.remaining_s() <= 0:
-            raise self._reject(
-                ctx, kind, name, DeadlineExceededError("Execution deadline exceeded")
-            )
+        exc = self._inactive(ctx)
+        if exc is not None:
+            raise self._reject(ctx, kind, name, exc)
 
     def _ensure_token_and_cost_budget(self, ctx: ExecutionContext, name: str) -> None:
         limits, counters = ctx.limits, ctx.counters
@@ -121,7 +124,13 @@ class Harness:
         self._ensure_token_and_cost_budget(ctx, name)
 
         remaining = ctx.remaining_s()
-        request = request.model_copy(update={"timeout_s": min(request.timeout_s, remaining)})
+        tokens_left = ctx.limits.max_total_tokens - ctx.counters.usage.total_tokens
+        request = request.model_copy(
+            update={
+                "timeout_s": min(request.timeout_s, remaining),
+                "max_output_tokens": min(request.max_output_tokens, tokens_left),
+            }
+        )
         ctx.counters.model_calls += 1  # counted when attempted, so failures still consume budget
         started = time.perf_counter()
         try:
@@ -204,14 +213,20 @@ class Harness:
         return tool, args
 
     async def call_tool(self, ctx: ExecutionContext, call: ToolCall) -> ToolOutcome:
-        self.ensure_active(ctx, "tool_call", call.name or "<missing>")
-        tool, args = self.authorize_tool_call(ctx, call)
+        name = call.name or "<missing>"
+        self.ensure_active(ctx, "tool_call", name)
         if ctx.counters.tool_calls >= ctx.limits.max_tool_calls:
             raise self._reject(
-                ctx, "tool_call", tool.name, BudgetExhaustedError("Tool call limit reached")
+                ctx, "tool_call", name, BudgetExhaustedError("Tool call limit reached")
             )
+        tool, args = self.authorize_tool_call(ctx, call)
         if tool.requires_approval and call.id not in ctx.approved_call_ids:
-            ctx.record("approval", tool.name, "pending", data={"call_id": call.id})
+            ctx.record(
+                "approval",
+                tool.name,
+                "pending",
+                data={"call_id": call.id, "arguments": args.model_dump(mode="json")},
+            )
             raise ApprovalRequiredError(f"{tool.name} requires human approval")
 
         ctx.counters.tool_calls += 1
@@ -220,7 +235,9 @@ class Harness:
         async def attempt() -> BaseModel:
             nonlocal attempts
             attempts += 1
-            self.ensure_active(ctx, "tool_call", tool.name)
+            inactive = self._inactive(ctx)  # recorded once, by the error handler below
+            if inactive is not None:
+                raise inactive
             budget = min(tool.timeout_s, ctx.remaining_s())
             try:
                 async with asyncio.timeout(budget):

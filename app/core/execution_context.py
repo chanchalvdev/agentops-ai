@@ -22,7 +22,8 @@ DEFAULT_PERMISSIONS = frozenset({"documents:read"})
 
 
 class LedgerEvent(BaseModel):
-    """One attempted operation. Holds decisions and references, never secrets or raw prompts."""
+    """One attempted operation: decisions, references, and validated tool arguments (user-scoped
+    data such as a search query, never secrets). Raw prompts and model reasoning are not stored."""
 
     seq: int
     kind: EventKind

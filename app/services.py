@@ -9,7 +9,9 @@ from dataclasses import dataclass
 import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.agents.custom_loop import AgentLoop
 from app.agents.harness import Harness
+from app.agents.store import ExecutionStore
 from app.core.config import Settings
 from app.core.security import ApiKeyAuthenticator
 from app.db.session import make_engine, make_sessionmaker
@@ -45,6 +47,8 @@ class Services:
     answerer: Answerer
     tools: ToolRegistry
     harness: Harness
+    agent_loop: AgentLoop
+    executions: ExecutionStore
 
     async def aclose(self) -> None:
         await self.http.aclose()
@@ -58,7 +62,7 @@ def build_router(
         primary = (
             FakeProvider()
             if settings.llm_provider == "fake"
-            else OllamaProvider(http, settings.ollama_base_url)
+            else OllamaProvider(http, settings.ollama_base_url, settings.llm_num_ctx)
         )
     main = [Route(primary, settings.llm_model_main)]
     small = [Route(primary, settings.llm_model_small)]
@@ -96,6 +100,7 @@ def build_services(
     )
     ingestion = IngestionService(sessions, embedder, settings)
     tools = ToolRegistry([DocumentSearch(retriever), Calculator(), DocumentMetadata(ingestion)])
+    harness = Harness(llm, tools)
     return Services(
         settings=settings,
         engine=engine,
@@ -114,5 +119,11 @@ def build_services(
             timeout_s=settings.llm_timeout_s,
         ),
         tools=tools,
-        harness=Harness(llm, tools),
+        harness=harness,
+        agent_loop=AgentLoop(
+            harness,
+            max_context_chars=settings.agent_max_context_chars,
+            max_output_tokens=settings.llm_max_output_tokens,
+        ),
+        executions=ExecutionStore(sessions),
     )

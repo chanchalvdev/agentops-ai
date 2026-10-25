@@ -276,13 +276,19 @@ class IngestionService:
                 raise NotFoundError("Document not found")
 
     async def mark_for_reindex(self, tenant_id: str, document_id: uuid.UUID) -> Document:
-        doc = await self.get(tenant_id, document_id)
-        if doc.status in (DocumentStatus.PENDING, DocumentStatus.PROCESSING):
-            raise ConflictError("Document is already being indexed")
+        # One conditional UPDATE: two concurrent reindex requests cannot both pass the check.
         async with self._sessions() as session, session.begin():
-            await session.execute(
+            claimed = await session.scalar(
                 update(Document)
-                .where(Document.id == document_id)
+                .where(
+                    Document.id == document_id,
+                    Document.tenant_id == tenant_id,
+                    Document.status.not_in([DocumentStatus.PENDING, DocumentStatus.PROCESSING]),
+                )
                 .values(status=DocumentStatus.PENDING, error=None)
+                .returning(Document.id)
             )
-        return await self.get(tenant_id, document_id)
+        doc = await self.get(tenant_id, document_id)  # NotFoundError if missing / other tenant
+        if claimed is None:
+            raise ConflictError("Document is already being indexed")
+        return doc

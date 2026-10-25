@@ -91,7 +91,7 @@ def select_evidence(chunks: list[RetrievedChunk], max_chars: int) -> list[Retrie
     return selected
 
 
-def _escape(text: str) -> str:
+def escape_untrusted(text: str) -> str:
     # Stop document text from closing our evidence fence and posing as instructions.
     return _FENCE_BREAKOUT.sub(lambda m: m.group(0).replace("<", "[").replace(">", "]"), text)
 
@@ -100,10 +100,10 @@ def build_messages(question: str, evidence: list[RetrievedChunk]) -> list[Messag
     blocks = []
     for i, c in enumerate(evidence, start=1):
         page = f' page="{c.page_start}"' if c.page_start else ""
-        section = f' section="{_escape(c.section)}"' if c.section else ""
+        section = f' section="{escape_untrusted(c.section)}"' if c.section else ""
         blocks.append(
-            f'<source id="S{i}" file="{_escape(c.filename)}"{page}{section}>\n'
-            f"{_escape(c.text)}\n</source>"
+            f'<source id="S{i}" file="{escape_untrusted(c.filename)}"{page}{section}>\n'
+            f"{escape_untrusted(c.text)}\n</source>"
         )
     user = f"<evidence>\n{chr(10).join(blocks)}\n</evidence>\n\nQuestion: {question}"
     return [Message(role="system", content=SYSTEM_PROMPT), Message(role="user", content=user)]

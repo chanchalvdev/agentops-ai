@@ -57,7 +57,10 @@ def _eval(node: ast.AST, depth: int = 0) -> float:
                 raise _bad(f"exponent larger than {MAX_EXPONENT}")
             if isinstance(op, ast.Div | ast.FloorDiv | ast.Mod) and rhs == 0:
                 raise _bad("division by zero")
-            result = _BINARY[type(op)](lhs, rhs)
+            try:
+                result = _BINARY[type(op)](lhs, rhs)
+            except (OverflowError, ZeroDivisionError) as exc:
+                raise _bad(str(exc)) from None
         case ast.UnaryOp(op=op, operand=operand) if type(op) in _UNARY:
             result = _UNARY[type(op)](_eval(operand, depth + 1))
         case ast.Call(func=ast.Name(id=fn), args=args, keywords=[]) if fn in _FUNCTIONS:
@@ -66,11 +69,12 @@ def _eval(node: ast.AST, depth: int = 0) -> float:
                 raise _bad(f"{fn}() takes 1 to 10 arguments")
             try:
                 result = _FUNCTIONS[fn](*values)
-            except (TypeError, ValueError) as exc:
+            except (TypeError, ValueError, OverflowError) as exc:
                 raise _bad(f"{fn}() {exc}") from None
         case _:
             raise _bad(f"unsupported syntax: {type(node).__name__}")
-    if isinstance(result, complex) or not math.isfinite(result) or abs(result) > MAX_MAGNITUDE:
+    if isinstance(result, complex) or abs(result) > MAX_MAGNITUDE or not math.isfinite(result):
+        # abs() first: math.isfinite raises OverflowError on huge ints instead of returning False
         raise _bad("result is not a finite real number within range")
     return result
 
