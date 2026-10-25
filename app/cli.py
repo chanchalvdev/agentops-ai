@@ -8,6 +8,7 @@ agentops run "What is the RPO in v2, in seconds?" --mode graph --trace
 
 import asyncio
 import json
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated
@@ -125,7 +126,7 @@ def run_agent(
         raise typer.BadParameter("mode must be loop or graph")
 
     async def run(services: Services) -> None:
-        ctx = services.agents.new_context(tenant, "cli")
+        ctx = services.agents.new_context(tenant, f"cli-{uuid.uuid4().hex[:12]}")
         r = await services.agents.run(ctx, mode, question)  # type: ignore[arg-type]
         typer.secho(f"[{r.status}] {r.answer}", bold=True)
         for c in r.citations:

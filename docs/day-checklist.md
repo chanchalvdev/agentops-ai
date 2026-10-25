@@ -108,9 +108,11 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [x] Every exit path persists the execution (incl. client disconnect → `cancelled`)
 - [x] Concurrent approvals resume exactly once (conditional UPDATE; tested with 4 parallel requests)
 - [x] `agentops run --mode graph|loop --trace`
+- [x] SSE keep-alive every 15 s without events (a live model call took 79 s); `error` event if the run fails after `start`
+- [x] Real server smoke test: lifespan opens the Postgres checkpointer, `/ready` ok, SSE calculation run answered `900 seconds [T1]` (verified)
 
 ### Verification
-- [x] 227 tests (unit + integration on Postgres), `-W error`, ruff, mypy strict clean
+- [x] 230 tests (unit + integration on Postgres), `-W error`, ruff, mypy strict clean
 - [x] Live qwen3:8b: graph 4/4 (RPO 5 min = 300 s verified; out-of-scope → insufficient_evidence); CLI RTO run answered + verified
 - [~] Live loop: grounded 4/4, complete 2/4 (omitted the seconds conversion twice) → Day 3 eval case
 - [x] Recorder agent: journals/interviews 02 (harness+tools), 03 (loop), 04 (graph), 05 (API)
@@ -124,6 +126,11 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [ ] An approved write that crashes before its checkpoint is replayed on recovery (no idempotency key) → Day 3 workspace tools
 - [ ] Graph answer prompt has no total evidence cap (fits 8k today: ≤15 passages × 1.5 KB) → Day 4
 - [ ] `insufficient_evidence` drafts return model text unverified; verifier output that fails to parse is reported as `unavailable`, not blocked → decide with Day 3 eval data
+- [ ] Approval flow is unreachable in production until a write tool exists and tenants can be granted write permissions → Day 3 workspace tools
+- [ ] Approve/reject resume synchronously (request lasts the rest of the run); move to 202 + poll/stream → Day 4
+- [ ] Approval claimed but resume fails/crashes → approval `approved`, execution stuck `awaiting_approval`; paused save + approval insert are two transactions → Day 4
+- [ ] SSE has no event ids / reconnect (a dropped connection cancels the run) → Day 5 UI
+- [ ] Cancelled/failed results drop partial evidence from the execution row (the ledger keeps it) → Day 4
 - [ ] Model calls are slow under memory pressure (other containers + 8b at 8k ctx) → Day 4 routing/caching
 
 ## Day 3 — Workspace tools + observability + evaluation (Fri 23 Oct)

@@ -199,3 +199,37 @@ async def test_reject_performs_no_write(
     ).json()
     assert note.saved == [] and done["status"] == "answered"
     assert done["tool_references"][0]["output"]["rejected_by_reviewer"] is True
+
+
+async def test_stream_sends_heartbeats_while_a_model_call_is_slow(
+    services: Services, fake_llm: FakeProvider
+) -> None:
+    async def slow_then_final(request: LLMRequest) -> LLMResponse:
+        await asyncio.sleep(0.25)
+        return LLMResponse(
+            content='{"answer": "n/a", "insufficient_evidence": true}',
+            model=request.model,
+            provider="fake",
+            latency_ms=250,
+        )
+
+    fake_llm.chat = slow_then_final  # type: ignore[method-assign]
+    ctx = services.agents.new_context("tenant_a", "req-hb")
+    kinds = [k async for k, _ in services.agents.stream(ctx, "loop", "?", heartbeat_s=0.05)]
+    assert "heartbeat" in kinds and kinds[-1] == "result"
+
+
+async def test_stream_reports_errors_after_start(
+    services: Services, fake_llm: FakeProvider
+) -> None:
+    async def broken_start(*args: Any) -> None:
+        raise RuntimeError("db down")
+
+    services.executions.start = broken_start  # type: ignore[method-assign]
+    ctx = services.agents.new_context("tenant_a", "req-err")
+    events = [e async for e in services.agents.stream(ctx, "loop", "?")]
+    assert events == [("error", {"code": "internal_error", "execution_id": str(ctx.execution_id)})]
+
+
+async def test_list_all_approval_statuses(client: httpx.AsyncClient) -> None:
+    assert (await client.get("/api/v1/approvals", params={"status": "all"})).status_code == 200

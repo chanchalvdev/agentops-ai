@@ -103,7 +103,8 @@ async def run_agent(
     summary="Run the agent, streaming progress as Server-Sent Events",
     description=(
         "Events: `step`, `model_call`, `tool_call`, `correction`, `approval`, `policy` as they "
-        "happen; then one `citation` per cited source and a closing `final` with the full result."
+        "happen; then one `citation` per cited source and a closing `final` with the full result "
+        "(or `error`). A `: keep-alive` comment is sent after 15 s without events."
     ),
 )
 async def run_agent_stream(
@@ -117,6 +118,12 @@ async def run_agent_stream(
     async def events() -> AsyncIterator[str]:
         yield _sse("start", {"execution_id": str(ctx.execution_id), "mode": body.mode})
         async for kind, data in services.agents.stream(ctx, body.mode, body.question):
+            if kind == "heartbeat":
+                yield ": keep-alive\n\n"  # SSE comment: keeps proxies from closing idle streams
+                continue
+            if kind == "error":
+                yield _sse("error", data)
+                continue
             if kind == "event":
                 if data["kind"] != "final":
                     yield _sse(data["kind"], data)
@@ -153,10 +160,12 @@ async def get_trace(execution_id: uuid.UUID, services: ServicesDep, principal: P
 async def list_approvals(
     services: ServicesDep,
     principal: PrincipalDep,
-    status: Literal["pending", "approved", "rejected"] | None = Query(default="pending"),
+    status: Literal["pending", "approved", "rejected", "all"] = Query(default="pending"),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> Any:
-    return await services.approvals.list(principal.tenant_id, status, limit)
+    return await services.approvals.list(
+        principal.tenant_id, None if status == "all" else status, limit
+    )
 
 
 @router.post(

@@ -18,7 +18,7 @@ from app.agents.graph import GraphRunner
 from app.agents.result import AgentRunResult, build_result
 from app.agents.store import ApprovalStore, ExecutionStore
 from app.core.budgets import ExecutionLimits
-from app.core.errors import ConflictError, InvalidRequestError, NotFoundError
+from app.core.errors import AppError, ConflictError, InvalidRequestError, NotFoundError
 from app.core.execution_context import ExecutionContext, LedgerEvent
 from app.tools.registry import ToolRegistry
 
@@ -76,20 +76,32 @@ class AgentService:
         return await self._execute(ctx, mode, lambda: self._start(ctx, mode, question))
 
     async def stream(
-        self, ctx: ExecutionContext, mode: Mode, question: str
+        self, ctx: ExecutionContext, mode: Mode, question: str, heartbeat_s: float = 15.0
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        """Yield ("event", ledger event) as the run progresses, then ("result", result)."""
+        """Yield ("event", ledger event) as the run progresses, ("heartbeat", {}) when nothing
+        happened for `heartbeat_s` (a single local model call can take over a minute, longer
+        than common proxy idle timeouts), then ("result", result) or ("error", error)."""
         queue: asyncio.Queue[LedgerEvent] = asyncio.Queue()
         ctx.listeners.append(queue.put_nowait)
         task = asyncio.create_task(self.run(ctx, mode, question))
         try:
             while not task.done() or not queue.empty():
                 getter = asyncio.ensure_future(queue.get())
-                done, _ = await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(
+                    {getter, task}, timeout=heartbeat_s, return_when=asyncio.FIRST_COMPLETED
+                )
                 if getter in done:
                     yield "event", getter.result().model_dump(mode="json")
-                else:
-                    getter.cancel()
+                    continue
+                getter.cancel()
+                if not done:
+                    yield "heartbeat", {}
+            if task.exception() is not None:
+                exc = task.exception()
+                logger.error("streamed execution failed", exc_info=exc)
+                code = exc.code if isinstance(exc, AppError) else "internal_error"
+                yield "error", {"code": code, "execution_id": str(ctx.execution_id)}
+                return
             yield "result", task.result().model_dump(mode="json")
         finally:
             if not task.done():  # client went away: stop the run; run() persists "cancelled"
