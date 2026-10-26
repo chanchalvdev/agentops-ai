@@ -4,7 +4,7 @@ import ast
 import math
 import operator
 from collections.abc import Callable
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -115,3 +115,6 @@ class Calculator(Tool[CalculatorInput, CalculatorOutput]):
 
     async def run(self, args: CalculatorInput, ctx: ExecutionContext) -> CalculatorOutput:
         return CalculatorOutput(expression=args.expression, result=evaluate(args.expression))
+
+    def ledger_output(self, output: CalculatorOutput) -> dict[str, Any]:
+        return {"result": output.result}

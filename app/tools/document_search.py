@@ -5,7 +5,7 @@ fences the text as untrusted evidence, so labels stay unique across several sear
 """
 
 import uuid
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -42,6 +42,8 @@ class Passage(BaseModel):
 class DocumentSearchOutput(BaseModel):
     query: str
     passages: list[Passage]
+    # Retrieval timings (embedding, vector, keyword) for traces; never shown to the model.
+    timings_ms: dict[str, float] = Field(default_factory=dict)
 
 
 class DocumentSearch(Tool[DocumentSearchInput, DocumentSearchOutput]):
@@ -55,6 +57,15 @@ class DocumentSearch(Tool[DocumentSearchInput, DocumentSearchOutput]):
     permissions: ClassVar[frozenset[str]] = frozenset({"documents:read"})
     timeout_s = 30.0  # includes the query embedding call
 
+    def ledger_output(self, output: DocumentSearchOutput) -> dict[str, Any]:
+        # What was retrieved, by reference: traces and evaluation need it, passage text stays out.
+        return {
+            "timings_ms": output.timings_ms,
+            "chunk_ids": [str(p.chunk_id) for p in output.passages],
+            "document_ids": list(dict.fromkeys(str(p.document_id) for p in output.passages)),
+            "filenames": list(dict.fromkeys(p.filename for p in output.passages)),
+        }
+
     def __init__(self, retriever: HybridRetriever, max_passage_chars: int = 2000) -> None:
         self._retriever, self._max_chars = retriever, max_passage_chars
 
@@ -65,8 +76,15 @@ class DocumentSearch(Tool[DocumentSearchInput, DocumentSearchOutput]):
             top_k=args.top_k,
             filters=RetrievalFilters(document_ids=args.document_ids, metadata=args.metadata),
         )
+        d = result.diagnostics
         return DocumentSearchOutput(
             query=args.query,
+            timings_ms={
+                "embed": d.embed_ms,
+                "vector": d.vector_ms,
+                "keyword": d.keyword_ms,
+                "total": d.total_ms,
+            },
             passages=[
                 Passage(
                     **c.model_dump(

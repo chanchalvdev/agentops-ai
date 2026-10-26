@@ -15,12 +15,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.core.budgets import BudgetCounters, ExecutionLimits
+from app.core.security import DOCUMENT_PERMISSIONS
 from app.llm.schemas import Usage
 
 EventKind = Literal["step", "model_call", "tool_call", "correction", "policy", "approval", "final"]
 EventStatus = Literal["ok", "error", "rejected", "pending"]
 
-DEFAULT_PERMISSIONS = frozenset({"documents:read"})
+DEFAULT_PERMISSIONS = DOCUMENT_PERMISSIONS
 
 
 class LedgerEvent(BaseModel):
@@ -47,6 +48,7 @@ class ExecutionContext:
     allowed_tools: frozenset[str]
     permissions: frozenset[str] = DEFAULT_PERMISSIONS
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    source: str = "api"  # api | cli | eval: lets observability route or sample by origin
     execution_id: uuid.UUID = field(default_factory=uuid.uuid4)
     clock: Callable[[], float] = time.monotonic
     workflow_state: str = "created"
@@ -54,6 +56,8 @@ class ExecutionContext:
     ledger: list[LedgerEvent] = field(default_factory=list)
     trace_ids: list[str] = field(default_factory=list)
     approved_call_ids: set[str] = field(default_factory=set)
+    # The tool call being executed right now; write tools use it as their idempotency key.
+    current_call_id: str | None = None
     cancel_reason: str | None = None
     # Called for every ledger event, e.g. to stream progress over SSE. Must not raise or block.
     listeners: list[Callable[[LedgerEvent], None]] = field(default_factory=list)
@@ -91,6 +95,7 @@ class ExecutionContext:
         return {
             "tenant_id": self.tenant_id,
             "request_id": self.request_id,
+            "source": self.source,
             "execution_id": str(self.execution_id),
             "limits": self.limits.model_dump(mode="json"),
             "allowed_tools": sorted(self.allowed_tools),
@@ -118,6 +123,7 @@ class ExecutionContext:
         return cls(
             tenant_id=snap["tenant_id"],
             request_id=snap["request_id"],
+            source=snap.get("source", "api"),
             execution_id=uuid.UUID(snap["execution_id"]),
             limits=ExecutionLimits.model_validate(snap["limits"]),
             allowed_tools=frozenset(snap["allowed_tools"]),

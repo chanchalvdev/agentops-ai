@@ -8,6 +8,7 @@ are skipped locally; set AGENTOPS_REQUIRE_DB=1 (CI does) to make that a failure 
 import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 
 import asyncpg
 import httpx
@@ -73,9 +74,11 @@ def cite_first_source(request: LLMRequest) -> str:
 
 
 @pytest.fixture
-def test_settings() -> Settings:
+def test_settings(tmp_path: Path) -> Settings:
     return Settings(
         env="test",
+        workspace_root=tmp_path / "workspace",
+        workspace_tenants="tenant_a",
         database_url=TEST_DATABASE_URL,
         llm_provider="fake",
         embedding_provider="fake",
@@ -129,7 +132,11 @@ async def services(
         test_settings, embedder=FakeEmbedder(test_settings.embedding_dim), llm_provider=fake_llm
     )
     async with svc.engine.begin() as conn:
-        await conn.execute(text("TRUNCATE documents, agent_executions CASCADE"))
+        await conn.execute(
+            text(
+                "TRUNCATE documents, agent_executions, workspace_audit, evaluation_datasets CASCADE"
+            )
+        )
     await svc.start()
     yield svc
     await svc.aclose()

@@ -17,10 +17,15 @@ logger = logging.getLogger(__name__)
 DEV_API_KEYS = {"dev-key-tenant-a": "tenant_a", "dev-key-tenant-b": "tenant_b"}
 
 
+DOCUMENT_PERMISSIONS = frozenset({"documents:read"})
+WORKSPACE_PERMISSIONS = frozenset({"workspace:read", "workspace:write", "workspace:exec"})
+
+
 @dataclass(frozen=True)
 class Principal:
     tenant_id: str
     key_id: str  # short fingerprint of the key, safe to log
+    permissions: frozenset[str] = DOCUMENT_PERMISSIONS
 
 
 def _fingerprint(key: str) -> str:
@@ -47,6 +52,13 @@ class ApiKeyAuthenticator:
             keys = dict(DEV_API_KEYS)
         # Store hashes so a heap dump or debug print does not reveal raw keys.
         self._digests = {hashlib.sha256(k.encode()).digest(): t for k, t in keys.items()}
+        self._workspace_tenants = settings.workspace_tenant_ids
+
+    def permissions_for(self, tenant_id: str) -> frozenset[str]:
+        """Permissions come from server configuration, never from the request."""
+        if tenant_id in self._workspace_tenants:
+            return DOCUMENT_PERMISSIONS | WORKSPACE_PERMISSIONS
+        return DOCUMENT_PERMISSIONS
 
     def authenticate(self, presented: str | None) -> Principal:
         if not presented:
@@ -59,4 +71,8 @@ class ApiKeyAuthenticator:
                 tenant = known_tenant
         if tenant is None:
             raise AuthenticationError("Invalid API key")
-        return Principal(tenant_id=tenant, key_id=_fingerprint(presented))
+        return Principal(
+            tenant_id=tenant,
+            key_id=_fingerprint(presented),
+            permissions=self.permissions_for(tenant),
+        )

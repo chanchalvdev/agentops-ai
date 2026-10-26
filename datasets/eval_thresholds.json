@@ -1,0 +1,12 @@
+{
+  "min_pass_rate": 0.6,
+  "max_pass_rate_drop": 0.05,
+  "max_category_drop": 0.25,
+  "max_evaluator_drop": 0.1,
+  "zero_tolerance_evaluators": [
+    "unauthorized_tools",
+    "workspace_effects"
+  ],
+  "max_p95_latency_increase": 0.5,
+  "max_newly_failing": 0
+}

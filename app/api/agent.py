@@ -93,7 +93,11 @@ async def run_agent(
     body: AgentRunRequest, request: Request, services: ServicesDep, principal: PrincipalDep
 ) -> AgentRunResult:
     ctx = services.agents.new_context(
-        principal.tenant_id, request.state.request_id, body.limits, body.tools
+        principal.tenant_id,
+        request.state.request_id,
+        body.limits,
+        body.tools,
+        principal.permissions,
     )
     return await services.agents.run(ctx, body.mode, body.question)
 
@@ -112,7 +116,11 @@ async def run_agent_stream(
 ) -> StreamingResponse:
     # Validate and build the context before streaming starts, so bad input is a normal 4xx.
     ctx = services.agents.new_context(
-        principal.tenant_id, request.state.request_id, body.limits, body.tools
+        principal.tenant_id,
+        request.state.request_id,
+        body.limits,
+        body.tools,
+        principal.permissions,
     )
 
     async def events() -> AsyncIterator[str]:
@@ -181,7 +189,11 @@ async def approve(
 ) -> AgentRunResult:
     reason = body.reason if body else None
     return await services.agents.decide(
-        principal.tenant_id, approval_id, approved=True, reason=reason
+        principal.tenant_id,
+        approval_id,
+        approved=True,
+        reason=reason,
+        permissions=principal.permissions,
     )
 
 
@@ -198,5 +210,9 @@ async def reject(
 ) -> AgentRunResult:
     reason = body.reason if body else None
     return await services.agents.decide(
-        principal.tenant_id, approval_id, approved=False, reason=reason
+        principal.tenant_id,
+        approval_id,
+        approved=False,
+        reason=reason,
+        permissions=principal.permissions,
     )

@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
@@ -69,10 +70,47 @@ class Settings(BaseSettings):
     # History budget for the agent prompt (~4 chars/token), leaving room for tools and output.
     agent_max_context_chars: int = Field(default=20_000, ge=2000)
 
+    # Sandboxed workspace (product.txt 9.1): each tenant may only touch <workspace_root>/<tenant>/.
+    # Use a disposable directory, never your home directory or a real repository.
+    workspace_root: Path = Path("workspace")
+    # Comma-separated tenants granted workspace:read/write/exec. Empty outside prod = tenant_a.
+    workspace_tenants: str = ""
+    workspace_max_read_bytes: int = Field(default=20_000, ge=1000, le=1_000_000)
+    workspace_max_write_bytes: int = Field(default=200_000, ge=1000, le=5_000_000)
+    workspace_exec_timeout_s: float = Field(default=60.0, gt=0, le=600)
+    workspace_max_output_bytes: int = Field(default=64_000, ge=1000, le=1_000_000)
+
+    # Observability (product.txt 10). Traces always go to the local log sink; hosted backends are
+    # optional and the app runs without them. Enabling one sends questions, answers, tool
+    # arguments (minimized), model names, and timings to that vendor; never document text.
+    telemetry_log: bool = True
+    telemetry_capture_io: bool = True  # include question/answer text in hosted traces
+    telemetry_timeout_s: float = Field(default=10.0, gt=0, le=60)
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langsmith_api_key: SecretStr | None = None
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+    langsmith_project: str = "agentops-ai"
+    # "eval": only evaluation runs go to LangSmith (compare vendors on the eval subset only).
+    langsmith_scope: Literal["eval", "all"] = "eval"
+
+    # Evaluation (product.txt 11). Cases run as their own tenant against a known corpus.
+    eval_tenant: str = Field(default="eval", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    eval_datasets_dir: Path = Path("datasets")
+    eval_corpus_dirs: list[Path] = [Path("datasets/corpus")]
+    eval_workspace_seed: Path = Path("datasets/eval_workspace")
+
     @model_validator(mode="after")
     def _check(self) -> "Settings":
         if self.chunk_overlap_chars >= self.chunk_size_chars:
             raise ValueError("chunk_overlap_chars must be smaller than chunk_size_chars")
+        root = self.workspace_root.expanduser().resolve()
+        if root in (Path("/"), Path.home().resolve()) or (root / ".git").exists():
+            raise ValueError(
+                "AGENTOPS_WORKSPACE_ROOT must be a dedicated directory, not / , your home "
+                "directory, or a git repository"
+            )
         if self.env == "prod":
             if not self.api_keys.get_secret_value():
                 raise ValueError("AGENTOPS_API_KEYS is required when AGENTOPS_ENV=prod")
@@ -83,6 +121,13 @@ class Settings(BaseSettings):
     @property
     def fallback_enabled(self) -> bool:
         return bool(self.fallback_base_url and self.fallback_api_key and self.fallback_model)
+
+    @property
+    def workspace_tenant_ids(self) -> frozenset[str]:
+        tenants = frozenset(t.strip() for t in self.workspace_tenants.split(",") if t.strip())
+        if not tenants and self.env == "dev":
+            return frozenset({"tenant_a"})  # dev demo default, like the built-in dev API keys
+        return tenants
 
 
 @lru_cache

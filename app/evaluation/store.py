@@ -1,0 +1,169 @@
+"""Persistence for evaluation datasets, runs, and per-case results."""
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.core.errors import NotFoundError
+from app.db.models import EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun
+from app.evaluation.dataset import Dataset
+from app.evaluation.evaluators import EvaluatorResult
+from app.evaluation.report import CaseReport, DatasetInfo, RunReport
+
+
+class EvaluationStore:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def upsert_dataset(self, dataset: Dataset) -> uuid.UUID:
+        async with self._sessions() as session, session.begin():
+            dataset_id: uuid.UUID | None = await session.scalar(
+                insert(EvaluationDataset)
+                .values(
+                    id=uuid.uuid4(),
+                    name=dataset.name,
+                    version=dataset.version,
+                    sha256=dataset.sha256,
+                    case_count=len(dataset.cases),
+                )
+                .on_conflict_do_nothing(constraint="uq_eval_datasets_name_sha")
+                .returning(EvaluationDataset.id)
+            )
+            if dataset_id is None:  # same content stored before
+                existing = await session.scalar(
+                    select(EvaluationDataset.id).where(
+                        EvaluationDataset.name == dataset.name,
+                        EvaluationDataset.sha256 == dataset.sha256,
+                    )
+                )
+                assert existing is not None
+                return existing
+            await session.execute(
+                insert(EvaluationCase),
+                [
+                    {
+                        "id": uuid.uuid4(),
+                        "dataset_id": dataset_id,
+                        "case_id": c.id,
+                        "category": c.category,
+                        "payload": c.model_dump(mode="json"),
+                    }
+                    for c in dataset.cases
+                ],
+            )
+            return dataset_id
+
+    async def start_run(
+        self, dataset_id: uuid.UUID, requested_by: str, mode: str, config: dict[str, Any]
+    ) -> EvaluationRun:
+        async with self._sessions() as session, session.begin():
+            row = EvaluationRun(
+                id=uuid.uuid4(),
+                dataset_id=dataset_id,
+                requested_by=requested_by,
+                status="running",
+                mode=mode,
+                config=config,
+                aggregate={},
+                total_cases=0,
+                passed_cases=0,
+            )
+            session.add(row)
+        return row
+
+    async def add_result(self, run_id: uuid.UUID, case: CaseReport) -> None:
+        values = case.model_dump(mode="json", exclude={"id", "evaluators", "cost_usd"})
+        async with self._sessions() as session, session.begin():
+            await session.execute(
+                insert(EvaluationResult)
+                .values(
+                    run_id=run_id,
+                    case_id=case.id,
+                    evaluators=[e.model_dump() for e in case.evaluators],
+                    **values,
+                )
+                .on_conflict_do_nothing(constraint="uq_eval_results_run_case")
+            )
+
+    async def finish_run(
+        self, run_id: uuid.UUID, aggregate: dict[str, Any], error: str | None = None
+    ) -> None:
+        async with self._sessions() as session, session.begin():
+            await session.execute(
+                update(EvaluationRun)
+                .where(EvaluationRun.id == run_id)
+                .values(
+                    status="failed" if error else "completed",
+                    aggregate=aggregate,
+                    total_cases=aggregate.get("total", 0),
+                    passed_cases=aggregate.get("passed", 0),
+                    pass_rate=aggregate.get("pass_rate"),
+                    error=error,
+                    finished_at=datetime.now(UTC),
+                )
+            )
+
+    async def list_runs(self, requested_by: str, limit: int = 50) -> list[EvaluationRun]:
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(EvaluationRun)
+                .where(EvaluationRun.requested_by == requested_by)
+                .order_by(EvaluationRun.started_at.desc())
+                .limit(limit)
+            )
+            return list(rows)
+
+    async def report(self, requested_by: str, run_id: uuid.UUID) -> RunReport:
+        async with self._sessions() as session:
+            run = await session.scalar(
+                select(EvaluationRun).where(
+                    EvaluationRun.id == run_id, EvaluationRun.requested_by == requested_by
+                )
+            )
+            if run is None:
+                raise NotFoundError("Evaluation run not found")
+            dataset = await session.get(EvaluationDataset, run.dataset_id)
+            assert dataset is not None
+            results = await session.scalars(
+                select(EvaluationResult)
+                .where(EvaluationResult.run_id == run_id)
+                .order_by(EvaluationResult.id)
+            )
+            cases = [
+                CaseReport(
+                    id=r.case_id,
+                    category=r.category,
+                    passed=r.passed,
+                    status=r.status,
+                    execution_id=r.execution_id,
+                    latency_ms=r.latency_ms,
+                    input_tokens=r.input_tokens,
+                    output_tokens=r.output_tokens,
+                    model_calls=r.model_calls,
+                    tool_calls=r.tool_calls,
+                    evaluators=[EvaluatorResult.model_validate(e) for e in r.evaluators],
+                    judge=r.judge,
+                    failures=r.failures,
+                    answer=r.answer,
+                )
+                for r in results
+            ]
+        return RunReport(
+            run_id=run.id,
+            dataset=DatasetInfo(
+                name=dataset.name,
+                version=dataset.version,
+                sha256=dataset.sha256,
+                cases=dataset.case_count,
+            ),
+            mode=run.mode,
+            config=run.config,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            aggregate=run.aggregate,
+            cases=cases,
+        )

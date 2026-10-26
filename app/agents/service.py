@@ -8,7 +8,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -19,8 +19,11 @@ from app.agents.result import AgentRunResult, build_result
 from app.agents.store import ApprovalStore, ExecutionStore
 from app.core.budgets import ExecutionLimits
 from app.core.errors import AppError, ConflictError, InvalidRequestError, NotFoundError
-from app.core.execution_context import ExecutionContext, LedgerEvent
+from app.core.execution_context import DEFAULT_PERMISSIONS, ExecutionContext, LedgerEvent
 from app.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from app.observability.telemetry import Telemetry
 
 logger = logging.getLogger(__name__)
 Mode = Literal["loop", "graph"]
@@ -46,10 +49,12 @@ class AgentService:
         executions: ExecutionStore,
         approvals: ApprovalStore,
         default_limits: ExecutionLimits,
+        telemetry: "Telemetry | None" = None,
     ) -> None:
         self._loop, self._graph, self._tools = loop, graph, tools
         self.executions, self.approvals = executions, approvals
         self._defaults = default_limits
+        self._telemetry = telemetry
 
     def new_context(
         self,
@@ -57,23 +62,33 @@ class AgentService:
         request_id: str,
         overrides: LimitOverrides | None = None,
         allowed_tools: list[str] | None = None,
+        permissions: frozenset[str] = DEFAULT_PERMISSIONS,
     ) -> ExecutionContext:
-        names = self._tools.names
-        if allowed_tools is not None:
-            unknown = set(allowed_tools) - names
+        if allowed_tools is None:
+            # By default the model is offered only the tools this tenant may actually use.
+            names = frozenset(
+                name
+                for name in self._tools.names
+                if (tool := self._tools.get(name)) and tool.permissions <= permissions
+            )
+        else:
+            unknown = set(allowed_tools) - self._tools.names
             if unknown:
                 raise InvalidRequestError(f"Unknown tools: {sorted(unknown)}")
-            names = frozenset(allowed_tools)
+            names = frozenset(allowed_tools)  # still permission-checked on every call
         return ExecutionContext(
             tenant_id=tenant_id,
             request_id=request_id,
             limits=self._defaults.tightened(**(overrides or LimitOverrides()).model_dump()),
             allowed_tools=names,
+            permissions=permissions,
         )
 
     async def run(self, ctx: ExecutionContext, mode: Mode, question: str) -> AgentRunResult:
         await self.executions.start(ctx, mode, question)
-        return await self._execute(ctx, mode, lambda: self._start(ctx, mode, question))
+        return await self._execute(
+            ctx, mode, lambda: self._start(ctx, mode, question), question=question
+        )
 
     async def stream(
         self, ctx: ExecutionContext, mode: Mode, question: str, heartbeat_s: float = 15.0
@@ -110,7 +125,13 @@ class AgentService:
                 await asyncio.gather(task, return_exceptions=True)
 
     async def decide(
-        self, tenant_id: str, approval_id: uuid.UUID, *, approved: bool, reason: str | None
+        self,
+        tenant_id: str,
+        approval_id: uuid.UUID,
+        *,
+        approved: bool,
+        reason: str | None,
+        permissions: frozenset[str] | None = None,
     ) -> AgentRunResult:
         approval = await self.approvals.decide(
             tenant_id, approval_id, approved=approved, reason=reason
@@ -119,10 +140,16 @@ class AgentService:
         ctx = await graph.restore_context(approval.execution_id)
         if ctx is None or ctx.tenant_id != tenant_id:
             raise NotFoundError("Execution not found")
+        if permissions is not None:
+            # Permissions are snapshotted in the checkpoint; a grant revoked while the run was
+            # paused must not still let the approved write through. Tighten, never widen.
+            ctx.permissions = ctx.permissions & permissions
+        execution = await self.executions.get(tenant_id, ctx.execution_id)
         return await self._execute(
             ctx,
             "graph",
             lambda: graph.resume(ctx, approved=approved, reason=reason, call_id=approval.call_id),
+            question=execution.question,  # so the finished trace still carries its input
         )
 
     async def _start(self, ctx: ExecutionContext, mode: Mode, question: str) -> AgentRunResult:
@@ -131,7 +158,11 @@ class AgentService:
         return await self._graph().run(ctx, question)
 
     async def _execute(
-        self, ctx: ExecutionContext, mode: Mode, run: Callable[[], Any]
+        self,
+        ctx: ExecutionContext,
+        mode: Mode,
+        run: Callable[[], Any],
+        question: str | None = None,
     ) -> AgentRunResult:
         try:
             result: AgentRunResult = await run()
@@ -142,6 +173,7 @@ class AgentService:
                 ctx, mode, EvidenceStore(), "cancelled", error_code="execution_cancelled"
             )
             await asyncio.shield(self.executions.save(ctx, result))
+            self._trace(ctx, result, question)
             raise
         except ConflictError:
             raise
@@ -156,4 +188,9 @@ class AgentService:
             pending = await self._graph().pending_approval(ctx)
             if pending:
                 await self.approvals.create(ctx.tenant_id, ctx.execution_id, pending)
+        self._trace(ctx, result, question)
         return result
+
+    def _trace(self, ctx: ExecutionContext, result: AgentRunResult, question: str | None) -> None:
+        if self._telemetry is not None:
+            self._telemetry.submit(ctx, result, question)  # background; never fails the run

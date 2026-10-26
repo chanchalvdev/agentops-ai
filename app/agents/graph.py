@@ -34,6 +34,8 @@ from app.core.errors import ConflictError
 from app.core.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
+# Bump when the node set or routing changes (v2: workspace tool rounds, duplicate-call guard).
+WORKFLOW_VERSION = "agent-graph-workflow-v2"
 
 
 def build_graph(

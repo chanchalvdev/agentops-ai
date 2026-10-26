@@ -29,3 +29,6 @@ jobs:
       - run: uv run ruff format --check app tests
       - run: uv run mypy app
       - run: uv run pytest -q # live Ollama tests are excluded by default (-m 'not live')
+      # Regression gate on the committed live baseline (no model needed: it reads the report).
+      # After a live `agentops eval run --out new.json`, gate it with --baseline the same way.
+      - run: uv run agentops eval check datasets/baselines/golden-v1-graph-qwen3-8b.json

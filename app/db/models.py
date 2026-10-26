@@ -1,4 +1,5 @@
-"""ORM models. Day 1: documents and chunks. Day 2: agent executions, their events, approvals."""
+"""ORM models. Day 1: documents and chunks. Day 2: agent executions, their events, approvals.
+Day 3: workspace audit log, evaluation datasets and runs."""
 
 import enum
 import uuid
@@ -188,3 +189,95 @@ class Approval(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WorkspaceAuditEvent(Base):
+    """One workspace operation by the agent or a user, including rejected ones. No FK to
+    agent_executions on purpose: the audit trail outlives deleted executions."""
+
+    __tablename__ = "workspace_audit"
+    __table_args__ = (Index("ix_workspace_audit_tenant_id", "tenant_id", "id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    actor: Mapped[str] = mapped_column(String(16))  # agent | user
+    execution_id: Mapped[uuid.UUID | None] = mapped_column()
+    key_id: Mapped[str | None] = mapped_column(String(32))
+    operation: Mapped[str] = mapped_column(String(16))
+    target: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16))  # ok | rejected | error
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    exit_code: Mapped[int | None] = mapped_column(Integer)
+    bytes: Mapped[int | None] = mapped_column(Integer)
+    duration_ms: Mapped[float] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvaluationDataset(Base):
+    """A versioned dataset file, identified by content hash: editing cases without bumping the
+    version still produces a distinct row, so runs are never compared on silently changed data."""
+
+    __tablename__ = "evaluation_datasets"
+    __table_args__ = (UniqueConstraint("name", "sha256", name="uq_eval_datasets_name_sha"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(100))
+    version: Mapped[str] = mapped_column(String(50))
+    sha256: Mapped[str] = mapped_column(String(64))
+    case_count: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvaluationCase(Base):
+    __tablename__ = "evaluation_cases"
+    __table_args__ = (UniqueConstraint("dataset_id", "case_id", name="uq_eval_cases_dataset_case"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("evaluation_datasets.id", ondelete="CASCADE")
+    )
+    case_id: Mapped[str] = mapped_column(String(64))
+    category: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)  # the full case: variable shape
+
+
+class EvaluationRun(Base):
+    __tablename__ = "evaluation_runs"
+    __table_args__ = (Index("ix_eval_runs_requested_started", "requested_by", "started_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("evaluation_datasets.id"))
+    requested_by: Mapped[str] = mapped_column(String(64))  # tenant that started it
+    status: Mapped[str] = mapped_column(String(16))  # running | completed | failed
+    mode: Mapped[str] = mapped_column(String(16))
+    # models, prompt/workflow versions, retrieval config: what the scores are scores OF
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    aggregate: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    total_cases: Mapped[int] = mapped_column(Integer, default=0)
+    passed_cases: Mapped[int] = mapped_column(Integer, default=0)
+    pass_rate: Mapped[float | None] = mapped_column()
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EvaluationResult(Base):
+    __tablename__ = "evaluation_results"
+    __table_args__ = (UniqueConstraint("run_id", "case_id", name="uq_eval_results_run_case"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("evaluation_runs.id", ondelete="CASCADE"))
+    case_id: Mapped[str] = mapped_column(String(64))
+    category: Mapped[str] = mapped_column(String(32))
+    passed: Mapped[bool | None] = mapped_column()  # None = skipped (mode not supported)
+    status: Mapped[str] = mapped_column(String(32))
+    execution_id: Mapped[uuid.UUID | None] = mapped_column()
+    latency_ms: Mapped[float | None] = mapped_column()
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    evaluators: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    judge: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    failures: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    answer: Mapped[str | None] = mapped_column(Text)

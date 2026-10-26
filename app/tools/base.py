@@ -5,7 +5,7 @@ model may *request* a tool; only the harness validates, authorizes, and executes
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -28,6 +28,21 @@ class Tool[I: BaseModel, O: BaseModel](ABC):
 
     @abstractmethod
     async def run(self, args: I, ctx: "ExecutionContext") -> O: ...
+
+    def approval_needed(self, args: I, ctx: "ExecutionContext") -> bool:
+        """Per-call approval decision. `requires_approval` means "may need approval" (the custom
+        loop, which cannot pause, drops such tools); a tool can relax it for safe arguments.
+        Raising an AppError here rejects the call before anyone is asked to approve it."""
+        return self.requires_approval
+
+    def ledger_arguments(self, args: I) -> dict[str, Any]:
+        """Arguments as stored in the ledger and traces. Override to drop bulky or sensitive
+        fields (e.g. file contents); the human reviewer still sees the full call."""
+        return args.model_dump(mode="json")
+
+    def ledger_output(self, output: O) -> dict[str, Any]:
+        """A small, safe summary of the result for the ledger (IDs, counts), not the payload."""
+        return {}
 
     def map_error(self, exc: Exception) -> AppError:
         """Translate an unexpected exception into a typed error safe to show the model."""

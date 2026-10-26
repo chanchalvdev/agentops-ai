@@ -4,6 +4,7 @@ Tests build the same container with fakes injected, so the API code under test i
 production code.
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,12 +35,19 @@ from app.llm.provider import (
     OpenAICompatibleProvider,
     Route,
 )
+from app.observability.interfaces import TraceSink
+from app.observability.langfuse_adapter import LangfuseSink
+from app.observability.langsmith_adapter import LangSmithSink
+from app.observability.telemetry import LogSink, Telemetry
 from app.rag.answer import Answerer
 from app.retrieval.hybrid_search import HybridRetriever
 from app.tools.calculator import Calculator
 from app.tools.document_metadata import DocumentMetadata
 from app.tools.document_search import DocumentSearch
 from app.tools.registry import ToolRegistry
+from app.tools.workspace import workspace_tools
+from app.workspace.audit import DbAudit
+from app.workspace.jail import WorkspaceManager
 
 
 @dataclass
@@ -60,6 +68,10 @@ class Services:
     executions: ExecutionStore
     approvals: ApprovalStore
     agents: AgentService
+    workspaces: WorkspaceManager
+    workspace_audit: DbAudit
+    telemetry: Telemetry
+    eval_task: "asyncio.Task[Any] | None" = None  # the one evaluation run allowed at a time
     _graph: GraphRunner | None = None
     _pool: AsyncConnectionPool[Any] | None = None
 
@@ -99,6 +111,10 @@ class Services:
         )
 
     async def aclose(self) -> None:
+        if self.eval_task is not None and not self.eval_task.done():
+            self.eval_task.cancel()  # the run row is marked failed by the runner's finally
+            await asyncio.gather(self.eval_task, return_exceptions=True)
+        await self.telemetry.flush()  # pending trace exports get a bounded chance to finish
         if self._pool is not None:
             await self._pool.close()
         await self.http.aclose()
@@ -126,6 +142,32 @@ def build_router(
     return LLMRouter({"main": main, "small": small}, max_retries=settings.llm_max_retries)
 
 
+def build_telemetry(settings: Settings, http: httpx.AsyncClient) -> Telemetry:
+    sinks: list[TraceSink] = [LogSink()] if settings.telemetry_log else []
+    if settings.langfuse_public_key and settings.langfuse_secret_key:
+        sinks.append(
+            LangfuseSink(
+                http,
+                settings.langfuse_host,
+                settings.langfuse_public_key,
+                settings.langfuse_secret_key,
+            )
+        )
+    if settings.langsmith_api_key:
+        sinks.append(
+            LangSmithSink(
+                http,
+                settings.langsmith_endpoint,
+                settings.langsmith_api_key,
+                settings.langsmith_project,
+                settings.langsmith_scope,
+            )
+        )
+    return Telemetry(
+        sinks, capture_io=settings.telemetry_capture_io, timeout_s=settings.telemetry_timeout_s
+    )
+
+
 def build_services(
     settings: Settings, *, embedder: Embedder | None = None, llm_provider: LLMProvider | None = None
 ) -> Services:
@@ -149,7 +191,23 @@ def build_services(
         sessions, embedder, candidate_k=settings.retrieval_candidate_k, rrf_k=settings.rrf_k
     )
     ingestion = IngestionService(sessions, embedder, settings)
-    tools = ToolRegistry([DocumentSearch(retriever), Calculator(), DocumentMetadata(ingestion)])
+    workspace_audit = DbAudit(sessions)
+    workspaces = WorkspaceManager(
+        settings.workspace_root,
+        workspace_audit,
+        max_read_bytes=settings.workspace_max_read_bytes,
+        max_write_bytes=settings.workspace_max_write_bytes,
+        exec_timeout_s=settings.workspace_exec_timeout_s,
+        max_output_bytes=settings.workspace_max_output_bytes,
+    )
+    tools = ToolRegistry(
+        [
+            DocumentSearch(retriever),
+            Calculator(),
+            DocumentMetadata(ingestion),
+            *workspace_tools(workspaces),
+        ]
+    )
     harness = Harness(llm, tools)
     agent_loop = AgentLoop(
         harness,
@@ -157,6 +215,7 @@ def build_services(
         max_output_tokens=settings.llm_max_output_tokens,
     )
     executions, approvals = ExecutionStore(sessions), ApprovalStore(sessions)
+    telemetry = build_telemetry(settings, http)
     services: Services
     agents = AgentService(
         agent_loop,
@@ -165,6 +224,7 @@ def build_services(
         executions,
         approvals,
         ExecutionLimits.from_settings(settings),
+        telemetry,
     )
     services = Services(
         settings=settings,
@@ -189,5 +249,8 @@ def build_services(
         executions=executions,
         approvals=approvals,
         agents=agents,
+        workspaces=workspaces,
+        workspace_audit=workspace_audit,
+        telemetry=telemetry,
     )
     return services

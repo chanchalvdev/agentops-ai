@@ -12,7 +12,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import agent, documents, health, llm, retrieval
+from app.api import (
+    agent,
+    documents,
+    evaluations,
+    health,
+    llm,
+    retrieval,
+    workspace,
+)
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging, request_id_var
@@ -119,7 +127,15 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         logger.exception("unhandled error")
         return _error(request, 500, "internal_error", "Internal server error")
 
-    for module in (health, documents, retrieval, llm, agent):
+    for module in (
+        health,
+        documents,
+        retrieval,
+        llm,
+        agent,
+        workspace,
+        evaluations,
+    ):
         app.include_router(module.router)
     return app
 

@@ -3,8 +3,10 @@
 A production-minded agentic RAG platform that runs fully on local, free models. It covers
 ingestion, hybrid retrieval, grounded answers with validated citations, an execution harness that
 enforces budgets and permissions in code, a custom agent loop, and a LangGraph workflow with
-answer verification and human approval. In progress: evaluation, drift monitoring, sandboxed
-workspace tools, and a web UI.
+answer verification and human approval, sandboxed workspace tools (files + allowlisted commands,
+writes gated by a human), traces exported to optional Langfuse/LangSmith, and an evaluation
+framework with a 38-case golden dataset and a CI-style regression gate. In progress: cost/latency
+optimization, drift monitoring, and a web UI.
 
 - Product spec: [product.txt](product.txt) · Architecture: [docs/architecture/system-design.png](docs/architecture/system-design.png)
 - Animated end-to-end flows: [docs/architecture/system-flow.gif](docs/architecture/system-flow.gif)
@@ -34,6 +36,10 @@ uv run agentops search "how long are transaction records kept"
 uv run agentops ask "What is the RPO in v2 and how does it differ from v1?"
 uv run agentops run "What is the RPO in the latest payments architecture, in seconds?" --trace
 uv run agentops run "..." --mode loop            # the hand-written agent loop instead of the graph
+uv run agentops run "Add a function minutes_to_seconds to calc/mathlib.py in my workspace"
+uv run agentops approvals && uv run agentops approve <approval-id>   # the human in the loop
+uv run agentops eval run --judge                 # 38 golden cases, JSON report under reports/
+uv run agentops eval check reports/eval-<id>.json --baseline datasets/baselines/golden-v1-graph-qwen3-8b.json
 
 uv run uvicorn --factory app.main:create_app --port 8000   # API + docs at http://localhost:8000/docs
 ```
@@ -71,9 +77,13 @@ curl -N -H "$H" -H 'content-type: application/json' localhost:8000/api/v1/agent/
 | GET | `/api/v1/executions/{id}/trace` | The execution ledger: every model call, tool call, rejection, and decision |
 | GET | `/api/v1/approvals?status=pending` | Tool calls paused for a human decision |
 | POST | `/api/v1/approvals/{id}/approve` · `/reject` | Decide once (409 afterwards); resumes the graph from its Postgres checkpoint |
-
-Errors always look like `{"error": {"code", "message", "request_id"}}`; validation errors add
-`details` with field locations only (submitted values are never echoed).
+| GET | `/api/v1/workspace/tree?path=` · `/file?path=` · `/search?q=` | Browse, read, and search the tenant's workspace (needs `workspace:read`) |
+| PUT | `/api/v1/workspace/file` | User-initiated write; same path jail (needs `workspace:write`) |
+| POST | `/api/v1/workspace/exec` | Allowlisted command, `argv` or a `line` (no shell); write/exec commands need `workspace:exec` |
+| WS | `/api/v1/workspace/terminal` | JSON terminal protocol over the same executor (first frame `{"api_key": ...}`) |
+| GET | `/api/v1/workspace/audit` | Every workspace operation by the agent or a user, including rejections |
+| POST | `/api/v1/evaluations/run` | 202 + run id; runs a dataset from `datasets/` in the background (one at a time) |
+| GET | `/api/v1/evaluations/runs` · `/runs/{id}` · `/compare?base=&head=` | Stored runs, per-case results, regression comparison |
 
 ## How it works
 
@@ -124,6 +134,53 @@ loop:    model ⇄ tools until final_answer (≤8 steps); repeated identical cal
   run must pause for a human, or each step needs its own model and test. See
   [app/agents/graph.py](app/agents/graph.py).
 
+### Workspace (sandboxed files + commands)
+
+Each tenant gets `AGENTOPS_WORKSPACE_ROOT/<tenant>/` (default `./workspace/`, gitignored; dev
+grants `tenant_a`, set `AGENTOPS_WORKSPACE_TENANTS` otherwise). Enforced in
+[app/workspace/](app/workspace/), never in prompts:
+
+- **Path jail**: relative paths only, no `..`, realpath before the containment check (symlinks
+  pointing outside are refused), plus a deny-list (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `.ssh/`,
+  `.git/config`; nothing under `.git/` is writable).
+- **Commands**: argv only (no shell, pipes, globbing, substitution), a per-command option
+  allowlist (`find -exec`, `grep -f`, `git diff --output` are refused), path arguments go through
+  the jail, a scrubbed environment (no API keys), a timeout that kills the process group, and an
+  output cap. Read-only: `ls cat head tail wc grep find`, `git status/diff/log`. Need approval:
+  `python -m pytest`, `pytest` (collection runs code), `git add`, `mkdir`.
+- **Writes** (`workspace_write`, `workspace_edit`) always pause at `human_approval`; approved
+  writes carry an idempotency receipt, and repeating the last side-effecting call is refused.
+- **Not an OS sandbox**: an approved `pytest` runs workspace code with the server's privileges.
+  The approval is the control; production would add a container or VM.
+
+### Observability
+
+Traces are built from the execution ledger after each run ([app/observability/](app/observability/)):
+one trace per execution (id = execution id), a span per graph node or loop turn, a generation per
+model call (model, tokens, latency), a span per tool call with retrieval child spans (embedding,
+vector, keyword), and events for rejections, approvals, corrections, and the final decision.
+Export is fire-and-forget with a timeout, so a backend outage never affects a run.
+
+- Always on: one structured `trace` log line per execution.
+- Langfuse: set `AGENTOPS_LANGFUSE_PUBLIC_KEY` / `_SECRET_KEY` (`_HOST` for self-hosted).
+- LangSmith: set `AGENTOPS_LANGSMITH_API_KEY`; by default (`AGENTOPS_LANGSMITH_SCOPE=eval`) only
+  evaluation runs and their scores go there, so both tools can be compared on the same subset.
+- Both adapters are tested against mocked HTTP only; no live Langfuse/LangSmith project was used.
+
+### Evaluation
+
+`datasets/golden_questions.jsonl` (golden-v1, 38 cases: answerable, multi-document,
+unanswerable, tool use, adversarial incl. a prompt-injection document, workspace) runs through the
+real agent as the `eval` tenant. Deterministic evaluators decide pass/fail: expected status,
+citation validity, required sources retrieved and cited, structured-output validity, tool
+arguments/results, forbidden tools never run or approved, approval requested, step limit, answer
+must/must-not contain, workspace effects. `--judge` adds advisory LLM scores (correctness,
+groundedness, relevance, completeness) that never decide pass/fail. Runs are stored in Postgres
+with dataset hash, models, prompt/workflow versions, and retrieval config.
+`agentops eval check` / `compare` exit 1 when [datasets/eval_thresholds.json](datasets/eval_thresholds.json)
+is breached (pass-rate floor and drop, per-category and per-evaluator drops, zero tolerance for
+`unauthorized_tools` and `workspace_effects`, p95 latency).
+
 ## Development
 
 ```bash
@@ -170,6 +227,14 @@ reported as `0` with `pricing_source: "local"`; hosted models without a configur
   qwen3:8b calls. Routing and caching are Day 4 work.
 - The loop's answers are grounded but sometimes incomplete (it answered "5 minutes" without the
   requested seconds conversion in 2 of 4 live runs). The Day 3 evaluation set measures this.
-- A pending approval is resumed only through the API; there is no expiry or notification yet.
+- A pending approval is resumed through the API or `agentops approve`; there is no expiry or
+  notification yet.
+- Workspace: not an OS sandbox (see above); permissions are all-or-nothing per tenant; receipts
+  are never cleaned up; the terminal is one command at a time, not a PTY.
+- After a failed first attempt and a successful retry, qwen3:8b sometimes reports the workspace
+  action as failed (caught by the `ws-edit-approved` eval case); Day 4 work.
+- LLM-judge scores come from the same local model family that wrote the answers: advisory only.
+- Live baseline (golden-v1, graph, qwen3:8b): 33/38 (87%). Tool use is the weak spot (2/5): the
+  graph often does unit conversions itself instead of calling the calculator.
 - Tokens spent on failed model calls and on router-internal retries are not counted against the
   token budget (the harness counts calls when attempted, but tokens only from successful replies).

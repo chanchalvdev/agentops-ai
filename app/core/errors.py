@@ -49,6 +49,10 @@ class ConflictError(AppError):
     code, status_code = "conflict", 409
 
 
+class PermissionDeniedError(AppError):
+    code, status_code = "permission_denied", 403
+
+
 # --- Provider (LLM / embedding) errors -------------------------------------------------------
 
 
@@ -123,3 +127,16 @@ class ToolTimeoutError(ToolExecutionError):
 
 class VerificationError(AppError):
     code, status_code = "verification_failed", 422
+
+
+# --- Workspace errors ------------------------------------------------------------------------
+# Raised by the path jail and the command policy. For the agent they are tool errors (the model is
+# told and may adapt); nothing outside the policy is ever executed.
+
+
+class WorkspaceAccessError(AppError):
+    code, status_code = "workspace_access_denied", 403
+
+
+class CommandNotAllowedError(WorkspaceAccessError):
+    code = "command_not_allowed"

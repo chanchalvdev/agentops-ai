@@ -5,12 +5,11 @@ as exactly one of FINAL or TOOL_CALLS -> validate -> execute tools through the h
 fenced results -> repeat. The model never decides whether a limit applies; the harness does.
 """
 
-import json
 import logging
 
 from app.agents.context import bound_history
 from app.agents.evidence import EvidenceStore, FinalAnswer, parse_final, validate_final
-from app.agents.harness import Harness
+from app.agents.harness import Harness, call_signature
 from app.agents.result import AgentRunResult, RunStatus, build_result, status_for_error
 from app.core.errors import (
     AppError,
@@ -25,7 +24,8 @@ from app.rag.answer import escape_untrusted
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "agent-loop-v1"
+PROMPT_VERSION = "agent-loop-v2"
+WORKFLOW_VERSION = "agent-loop-workflow-v1"
 FINAL_TOOL = "final_answer"
 # Errors that end the run. Everything else a tool raises is shown to the model so it can adapt.
 TERMINAL = (
@@ -41,6 +41,7 @@ Tools:
 - document_search: find passages. Search before answering any question about document content.
 - document_metadata: version, latest-version flag, status, and labels of a document.
 - calculator: use it for every calculation; do not do arithmetic in your head.
+- workspace_list / workspace_read / workspace_search: the user's workspace files, if offered.
 - final_answer: call it exactly once, alone, when you are done.
 
 Rules:
@@ -60,10 +61,6 @@ def _final_spec() -> ToolSpec:
         description="Submit the final answer with citations. Ends the task.",
         parameters=schema,
     )
-
-
-def _signature(call: ToolCall) -> str:
-    return f"{call.name}:{json.dumps(call.arguments, sort_keys=True, default=str)}"
 
 
 class AgentLoop:
@@ -203,7 +200,7 @@ class AgentLoop:
     async def _execute(
         self, ctx: ExecutionContext, store: EvidenceStore, call: ToolCall, seen: set[str]
     ) -> Message:
-        signature = _signature(call)
+        signature = call_signature(call)
         if signature in seen:
             # Repeated identical call: do not execute again; spend a bounded correction instead.
             self.harness.consume_correction(ctx, "repeated_tool_call")

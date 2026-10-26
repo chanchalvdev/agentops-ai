@@ -6,6 +6,7 @@ never trusted to enforce any of this itself; the custom loop and every LangGraph
 """
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -40,6 +41,11 @@ class ToolOutcome(BaseModel):
     output: dict[str, Any]
     latency_ms: float
     attempts: int
+
+
+def call_signature(call: ToolCall) -> str:
+    """Identity of a call for repeat detection: tool name plus canonical arguments."""
+    return f"{call.name}:{json.dumps(call.arguments, sort_keys=True, default=str)}"
 
 
 def _argument_problems(exc: ValidationError) -> str:
@@ -220,12 +226,16 @@ class Harness:
                 ctx, "tool_call", name, BudgetExhaustedError("Tool call limit reached")
             )
         tool, args = self.authorize_tool_call(ctx, call)
-        if tool.requires_approval and call.id not in ctx.approved_call_ids:
+        try:
+            needs_approval = tool.approval_needed(args, ctx)
+        except AppError as exc:
+            raise self._reject(ctx, "tool_call", tool.name, exc) from None
+        if needs_approval and call.id not in ctx.approved_call_ids:
             ctx.record(
                 "approval",
                 tool.name,
                 "pending",
-                data={"call_id": call.id, "arguments": args.model_dump(mode="json")},
+                data={"call_id": call.id, "arguments": tool.ledger_arguments(args)},
             )
             raise ApprovalRequiredError(f"{tool.name} requires human approval")
 
@@ -239,6 +249,7 @@ class Harness:
             if inactive is not None:
                 raise inactive
             budget = min(tool.timeout_s, ctx.remaining_s())
+            ctx.current_call_id = call.id
             try:
                 async with asyncio.timeout(budget):
                     result = await tool.run(args, ctx)
@@ -256,6 +267,8 @@ class Harness:
                 raise
             except Exception as exc:
                 raise tool.map_error(exc) from exc
+            finally:
+                ctx.current_call_id = None
 
         started = time.perf_counter()
         try:
@@ -289,7 +302,8 @@ class Harness:
             data={
                 "call_id": call.id,
                 "attempts": attempts,
-                "arguments": args.model_dump(mode="json"),
+                "arguments": tool.ledger_arguments(args),
+                **({"result": summary} if (summary := tool.ledger_output(output)) else {}),
             },
         )
         return ToolOutcome(

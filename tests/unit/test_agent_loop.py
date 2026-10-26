@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.agents.context import bound_history
-from app.agents.custom_loop import AgentLoop
+from app.agents.custom_loop import PROMPT_VERSION, AgentLoop
 from app.agents.evidence import EvidenceStore
 from app.agents.harness import Harness
 from app.core.budgets import ExecutionLimits
@@ -407,7 +407,7 @@ async def test_exhausted_citation_corrections_report_failed_validation_code() ->
     loop, _, _ = make_loop(script(bad, bad, bad))
     result = await loop.run(make_ctx(max_corrections=1), "?")
     assert result.status == "failed_validation" and result.error_code == "failed_validation"
-    assert result.ledger[-1].data["prompt_version"] == "agent-loop-v1"
+    assert result.ledger[-1].data["prompt_version"] == PROMPT_VERSION
 
 
 async def test_fenced_json_content_is_accepted_as_final() -> None:

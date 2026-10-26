@@ -11,7 +11,7 @@ from typing import Any, Literal, TypedDict
 from app.agents.harness import Harness
 from app.core.execution_context import ExecutionContext
 
-Intent = Literal["document_question", "calculation", "metadata_lookup", "other"]
+Intent = Literal["document_question", "calculation", "metadata_lookup", "workspace_task", "other"]
 CallStatus = Literal["queued", "pending", "approved", "rejected"]
 
 
@@ -31,6 +31,9 @@ class AgentState(TypedDict, total=False):
     plan: list[str]  # search queries
     evidence: dict[str, Any]  # EvidenceStore.to_state()
     pending_calls: list[PendingCall]
+    tool_rounds: int  # model-planned tool rounds so far (workspace tasks may need several)
+    round_executed: int  # tool calls executed in the latest pass (0 = nothing new to act on)
+    completed_calls: list[str]  # side-effecting calls that succeeded, in order (repeat guard)
     draft: dict[str, Any] | None  # FinalAnswer
     previous_output: str  # raw last answer output, replayed as context for a correction
     findings: list[str]  # validation / verification problems for the current draft
