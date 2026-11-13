@@ -8,12 +8,19 @@ agentops approvals                      # pending human decisions
 agentops approve <approval-id>          # or: agentops reject <approval-id> --reason "..."
 agentops eval run --judge --out reports/eval.json [--baseline datasets/baselines/x.json]
 agentops eval compare base.json head.json
+agentops eval retrieval --out reports/retrieval.json          # recall@k / hit rate / MRR, no LLM
+agentops experiment list
+agentops experiment run optimized --kind agent --judge --out reports/bench-optimized.json
+agentops experiment benchmark reports/bench-baseline.json reports/bench-optimized.json
+agentops drift check [--eval-report r.json] [--retrieval-report r.json]   # exit 1 on drift
+agentops metrics --hours 24
 """
 
 import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -26,14 +33,24 @@ from app.core.logging import configure_logging
 from app.evaluation.dataset import load_dataset
 from app.evaluation.regression import Thresholds, check, compare, load_report, load_thresholds
 from app.evaluation.report import CaseReport, RunReport, summary
+from app.evaluation.retrieval_eval import RetrievalReport, run_retrieval_eval
 from app.evaluation.runner import EvaluationRunner
+from app.experiments.benchmark import markdown
+from app.experiments.configurations import load_profiles
+from app.experiments.runner import run_profile
 from app.ingestion.parsers import SUPPORTED_TYPES
+from app.monitoring.alerts import CheckOut, MonitoringService
+from app.monitoring.metrics import operational_metrics
 from app.retrieval.schemas import RetrievalMode
 from app.services import Services, build_services
 
 cli = typer.Typer(no_args_is_help=True, add_completion=False)
 eval_cli = typer.Typer(no_args_is_help=True, help="Run and compare evaluations (product.txt 11).")
 cli.add_typer(eval_cli, name="eval")
+experiment_cli = typer.Typer(no_args_is_help=True, help="Configuration profiles and benchmarks.")
+cli.add_typer(experiment_cli, name="experiment")
+drift_cli = typer.Typer(no_args_is_help=True, help="Drift detection (product.txt 13).")
+cli.add_typer(drift_cli, name="drift")
 Tenant = Annotated[str, typer.Option(help="Tenant to act as")]
 
 
@@ -313,6 +330,178 @@ def eval_check(report: Path, baseline: Path | None = None, thresholds: Path | No
     _print_breaches(
         check(head, load_report(baseline) if baseline else None, _thresholds(thresholds))
     )
+
+
+@eval_cli.command("retrieval")
+def eval_retrieval(
+    dataset: Path = Path("datasets/golden_questions.jsonl"),
+    k: Annotated[int, typer.Option(help="top k passages per question")] = 5,
+    out: Annotated[Path | None, typer.Option(help="Write the JSON report here")] = None,
+) -> None:
+    """Retrieval-only evaluation: recall@k, hit rate, MRR, source distribution (no model)."""
+    data = load_dataset(dataset)
+    report: RetrievalReport | None = None
+
+    async def run(services: Services) -> None:
+        nonlocal report
+        report = await run_retrieval_eval(services, data, k=k)
+
+    asyncio.run(_with_services(run))
+    assert report is not None
+    _print_retrieval(report)
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2))
+        typer.echo(f"Report: {out}")
+
+
+def _print_retrieval(report: RetrievalReport) -> None:
+    m = report.metrics
+    typer.echo(
+        f"Retrieval {report.run_id} profile={report.profile} k={m.get('k')} cases={m.get('cases')}"
+        f"\n  hit_rate={m.get('hit_rate')} recall@k={m.get('recall_at_k')} mrr={m.get('mrr')} "
+        f"empty={m.get('empty_results')} p95={(m.get('latency_ms') or {}).get('p95')} ms"
+        f"\n  config={json.dumps(report.config)}"
+    )
+    if m.get("misses"):
+        typer.secho(f"  misses: {m['misses']}", fg="yellow")
+
+
+@experiment_cli.command("list")
+def experiment_list(file: Path = Path("datasets/experiments.json")) -> None:
+    """Show the configured profiles and their overrides."""
+    for p in load_profiles(file).values():
+        typer.echo(f"{p.name:<22} [{p.purpose}] {p.description}")
+        typer.echo(f"{'':<22} {json.dumps(p.overrides)}")
+
+
+@experiment_cli.command("run")
+def experiment_run(
+    profile: str,
+    kind: Annotated[str, typer.Option(help="agent | retrieval")] = "agent",
+    mode: Annotated[str, typer.Option(help="graph | loop")] = "graph",
+    judge: Annotated[bool, typer.Option(help="Add advisory LLM-judge scores")] = False,
+    case: Annotated[list[str] | None, typer.Option(help="Only these case ids")] = None,
+    category: Annotated[list[str] | None, typer.Option(help="Only these categories")] = None,
+    out: Annotated[Path | None, typer.Option(help="Write the JSON report here")] = None,
+    file: Path = Path("datasets/experiments.json"),
+    dataset: Path = Path("datasets/golden_questions.jsonl"),
+) -> None:
+    """Run the golden set under a profile's settings (its own services, cold caches)."""
+    if kind not in ("agent", "retrieval") or mode not in ("graph", "loop"):
+        raise typer.BadParameter("kind must be agent|retrieval and mode graph|loop")
+    chosen = load_profiles(file).get(profile)
+    if chosen is None:
+        raise typer.BadParameter(f"unknown profile {profile}")
+    data = load_dataset(dataset)
+    configure_logging("WARNING")
+
+    def progress(c: CaseReport) -> None:
+        mark = {True: "PASS", False: "FAIL", None: "skip"}[c.passed]
+        typer.echo(f"  {mark} {c.id:<24} {c.status:<22} {((c.latency_ms or 0) / 1000):6.1f}s")
+
+    report = asyncio.run(
+        run_profile(
+            get_settings(),
+            chosen,
+            data,
+            kind=kind,  # type: ignore[arg-type]
+            mode=mode,  # type: ignore[arg-type]
+            judge=judge,
+            case_ids=case,
+            categories=category,
+            on_case=progress,
+        )
+    )
+    if isinstance(report, RetrievalReport):
+        _print_retrieval(report)
+    else:
+        typer.echo("\n" + summary(report))
+    target = out or Path("reports") / f"experiment-{profile}-{kind}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(report.model_dump_json(indent=2))
+    typer.echo(f"Report: {target}")
+
+
+@experiment_cli.command("benchmark")
+def experiment_benchmark(
+    reports: list[Path],
+    out: Annotated[Path | None, typer.Option(help="Write the markdown table here")] = None,
+    thresholds: Path | None = None,
+) -> None:
+    """Compare agent reports (first = baseline): cost, latency, success, quality, calls."""
+    table = markdown([load_report(p) for p in reports], _thresholds(thresholds))
+    typer.echo(table)
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(table + "\n")
+
+
+@drift_cli.command("check")
+def drift_check(
+    eval_report: Annotated[Path | None, typer.Option(help="Agent eval report to check")] = None,
+    eval_baseline: Annotated[Path | None, typer.Option(help="Override the baseline")] = None,
+    retrieval_report: Annotated[Path | None, typer.Option(help="Retrieval report")] = None,
+    retrieval_baseline: Annotated[Path | None, typer.Option(help="Override")] = None,
+    persist: Annotated[bool, typer.Option(help="Store the check and its alerts")] = True,
+) -> None:
+    """Compare quality, retrieval, data, and operational metrics with their references.
+    Exit 1 on measured drift, 0 otherwise (suspected drift is printed, not failed)."""
+    result: CheckOut | None = None
+
+    async def run(services: Services) -> None:
+        nonlocal result
+        result = await MonitoringService(services).check(
+            "cli",
+            eval_head=load_report(eval_report) if eval_report else None,
+            eval_base=load_report(eval_baseline) if eval_baseline else None,
+            retrieval_head=_retrieval(retrieval_report),
+            retrieval_base=_retrieval(retrieval_baseline),
+            persist=persist,
+        )
+
+    asyncio.run(_with_services(run))
+    assert result is not None
+    colors = {"ok": "green", "insufficient_data": "white"}
+    for sig in result.report.signals:
+        label = sig.status if sig.status != "drift" else f"DRIFT/{sig.evidence}"
+        typer.secho(
+            f"  {sig.category:<11} {sig.metric:<34} {label:<18} {sig.message[:120]}",
+            fg=colors.get(sig.status, "red" if sig.evidence == "measured" else "yellow"),
+        )
+    status = result.report.status
+    typer.secho(
+        f"\nDrift status: {status} ({len(result.alerts)} alerts, check {result.id})",
+        fg={"ok": "green", "suspected": "yellow"}.get(status, "red"),
+        bold=True,
+    )
+    if status == "drift":
+        raise typer.Exit(1)
+
+
+def _retrieval(path: Path | None) -> RetrievalReport | None:
+    return RetrievalReport.model_validate_json(path.read_text()) if path else None
+
+
+@cli.command()
+def metrics(
+    hours: float = 24.0,
+    tenant: Annotated[str | None, typer.Option(help="Tenant; omit for all tenants")] = None,
+) -> None:
+    """Operational metrics over the last N hours (latency, errors, retries, tokens, cost)."""
+
+    async def run(services: Services) -> None:
+        now = datetime.now(UTC)
+        typer.echo(
+            json.dumps(
+                await operational_metrics(
+                    services.sessions, start=now - timedelta(hours=hours), end=now, tenant_id=tenant
+                ),
+                indent=2,
+            )
+        )
+
+    asyncio.run(_with_services(run))
 
 
 def main() -> None:

@@ -51,8 +51,33 @@ class Settings(BaseSettings):
     # Retrieval
     retrieval_top_k: int = Field(default=6, ge=1, le=50)
     retrieval_candidate_k: int = Field(default=30, ge=1, le=200)
+    retrieval_mode: Literal["hybrid", "vector", "keyword"] = "hybrid"
+    # Drop chunks below this cosine similarity unless a keyword also matched. Off by default; the
+    # tuned value lives in datasets/experiments.json with the measurements that justify it.
+    retrieval_min_vector_score: float | None = Field(default=None, ge=0, le=1)
     rrf_k: int = Field(default=60, ge=1)
     max_evidence_chars: int = Field(default=8000, ge=500)
+
+    # Optimization switches (product.txt 12). All off by default so a benchmark measures each one
+    # against the same code; datasets/experiments.json holds the profiles.
+    agent_query_rewrite: bool = True  # small-model search queries on top of the question
+    agent_search_top_k: int = Field(default=5, ge=3, le=10)  # per query in the graph's retrieval
+    agent_max_evidence_passage_chars: int = Field(default=30_000, ge=500)  # total, graph only
+    agent_rule_routing: bool = False  # code decides when tools are needed; forces the calculator
+    agent_route_simple_to_small: bool = False  # simple lookups answered by the small model
+    cache_query_embeddings: bool = False
+    cache_tool_results: bool = False
+    cache_ttl_s: float = Field(default=600.0, gt=0)
+    cache_max_entries: int = Field(default=1024, ge=1)
+    # Answer reuse for paraphrased questions: off unless explicitly enabled.
+    semantic_cache_enabled: bool = False
+    semantic_cache_min_similarity: float = Field(default=0.97, ge=0.8, le=1)
+    semantic_cache_ttl_s: float = Field(default=3600.0, gt=0)
+
+    # Optional reference prices (USD per 1M tokens) for a hypothetical "what would this cost hosted"
+    # comparison, always labelled as such. Unset means the figure is reported as unavailable.
+    reference_price_input_per_mtok: Decimal | None = Field(default=None, ge=0)
+    reference_price_output_per_mtok: Decimal | None = Field(default=None, ge=0)
 
     # Agent execution limits (defaults for ExecutionLimits; a request may only tighten them)
     agent_max_steps: int = Field(default=8, ge=1, le=50)
@@ -101,6 +126,23 @@ class Settings(BaseSettings):
     eval_corpus_dirs: list[Path] = [Path("datasets/corpus")]
     eval_workspace_seed: Path = Path("datasets/eval_workspace")
 
+    # Monitoring (product.txt 13): references the drift check compares against, versioned files.
+    monitoring_eval_baseline: Path = Path("datasets/baselines/golden-v1-graph-qwen3-8b-day4.json")
+    monitoring_retrieval_baseline: Path = Path("datasets/baselines/retrieval-golden-v1.json")
+    monitoring_thresholds: Path = Path("datasets/drift_thresholds.json")
+    experiments_file: Path = Path("datasets/experiments.json")
+    # Tenants allowed to run evaluations/experiments and read system-wide monitoring.
+    # Comma-separated; empty outside prod = tenant_a (dev/test), empty in prod = nobody.
+    admin_tenants: str = ""
+
+    # Rate limiting (product.txt 16). In-process token buckets per tenant and route class: correct
+    # for one API process (this project's deployment); several replicas would need a shared store.
+    rate_limit_enabled: bool = True
+    rate_limit_agent_per_min: int = Field(default=30, ge=1)  # agent runs, approvals
+    rate_limit_upload_per_min: int = Field(default=60, ge=1)  # document uploads, reindex
+    rate_limit_expensive_per_min: int = Field(default=6, ge=1)  # evaluations, experiments, checks
+    rate_limit_workspace_per_min: int = Field(default=120, ge=1)  # workspace exec / writes
+
     @model_validator(mode="after")
     def _check(self) -> "Settings":
         if self.chunk_overlap_chars >= self.chunk_size_chars:
@@ -121,6 +163,13 @@ class Settings(BaseSettings):
     @property
     def fallback_enabled(self) -> bool:
         return bool(self.fallback_base_url and self.fallback_api_key and self.fallback_model)
+
+    @property
+    def admin_tenant_ids(self) -> frozenset[str]:
+        tenants = frozenset(t.strip() for t in self.admin_tenants.split(",") if t.strip())
+        if not tenants and self.env != "prod":
+            return frozenset({"tenant_a"})
+        return tenants
 
     @property
     def workspace_tenant_ids(self) -> frozenset[str]:

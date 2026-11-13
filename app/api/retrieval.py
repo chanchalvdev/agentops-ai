@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.api.deps import PrincipalDep, ServicesDep
+from app.api.deps import PrincipalDep, ServicesDep, rate_limited
 from app.rag.answer import GroundedAnswer
 from app.retrieval.schemas import RetrievalFilters, RetrievalMode, RetrievalResult
 
@@ -25,6 +25,7 @@ class AnswerRequest(BaseModel):
     "/retrieval/search",
     response_model=RetrievalResult,
     summary="Hybrid (vector + full-text, RRF) search with per-result diagnostics",
+    dependencies=[rate_limited("agent")],  # every query is an embedding call
 )
 async def search(
     body: SearchRequest, services: ServicesDep, principal: PrincipalDep
@@ -38,6 +39,7 @@ async def search(
     "/rag/answer",
     response_model=GroundedAnswer,
     summary="Non-agentic baseline: retrieve, answer, and validate citations",
+    dependencies=[rate_limited("agent")],
 )
 async def answer(
     body: AnswerRequest, services: ServicesDep, principal: PrincipalDep

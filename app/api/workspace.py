@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from app.api.deps import PrincipalDep, ServicesDep
+from app.api.deps import PrincipalDep, ServicesDep, rate_limited
 from app.core.errors import (
     AppError,
     AuthenticationError,
@@ -115,6 +115,7 @@ async def read_file(
     "/file",
     response_model=WriteResult,
     summary="Create or overwrite a text file",
+    dependencies=[rate_limited("workspace")],
 )
 async def write_file(
     body: FileWrite, services: ServicesDep, principal: PrincipalDep
@@ -141,6 +142,7 @@ async def search(
     "/exec",
     response_model=ExecResult,
     summary="Run an allowlisted command",
+    dependencies=[rate_limited("workspace")],
 )
 async def exec_command(
     body: ExecRequest, services: ServicesDep, principal: PrincipalDep

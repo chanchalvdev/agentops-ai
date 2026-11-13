@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.cache import TTLCache
 from app.core.errors import AppError, RetrievalError
 from app.ingestion.embeddings import Embedder
 from app.retrieval.keyword_search import keyword_search
@@ -65,9 +66,38 @@ class HybridRetriever:
         *,
         candidate_k: int = 30,
         rrf_k: int = 60,
+        default_mode: RetrievalMode = "hybrid",
+        min_vector_score: float | None = None,
+        query_cache: TTLCache[list[float]] | None = None,
     ) -> None:
         self._sessions, self._embedder = sessionmaker, embedder
         self._candidate_k, self._rrf_k = candidate_k, rrf_k
+        self.default_mode, self.min_vector_score = default_mode, min_vector_score
+        self.query_cache = query_cache
+
+    def config(self) -> dict[str, object]:
+        """Everything a result depends on besides the corpus: part of every cache key."""
+        return {
+            "mode": self.default_mode,
+            "candidate_k": self._candidate_k,
+            "rrf_k": self._rrf_k,
+            "min_vector_score": self.min_vector_score,
+            "embedding_model": self._embedder.model,
+        }
+
+    async def _embed_query(
+        self, tenant_id: str, query: str, diag: RetrievalDiagnostics
+    ) -> list[float]:
+        # Keyed by tenant too: the vector does not depend on it, but a shared entry would let one
+        # tenant learn from latency that another tenant asked the same question.
+        key = (tenant_id, self._embedder.model, query)
+        if self.query_cache is not None and (hit := self.query_cache.get(key)) is not None:
+            diag.embed_cached = True
+            return hit
+        vector = await self._embedder.embed_query(query)
+        if self.query_cache is not None:
+            self.query_cache.put(key, vector)
+        return vector
 
     async def search(
         self,
@@ -75,9 +105,10 @@ class HybridRetriever:
         query: str,
         *,
         top_k: int = 6,
-        mode: RetrievalMode = "hybrid",
+        mode: RetrievalMode | None = None,
         filters: RetrievalFilters | None = None,
     ) -> RetrievalResult:
+        mode = mode or self.default_mode
         filters = filters or RetrievalFilters()
         diag = RetrievalDiagnostics(mode=mode)
         start = time.perf_counter()
@@ -87,7 +118,7 @@ class HybridRetriever:
         try:
             if mode in ("vector", "hybrid"):
                 t = time.perf_counter()
-                query_vector = await self._embedder.embed_query(query)
+                query_vector = await self._embed_query(tenant_id, query, diag)
                 diag.embed_ms = (time.perf_counter() - t) * 1000
             async with self._sessions() as session, session.begin():
                 if mode in ("vector", "hybrid"):
@@ -113,6 +144,16 @@ class HybridRetriever:
             for rank, item in enumerate(ranked, start=1):
                 setattr(item, f"{mode}_rank", rank)
                 setattr(item, f"{mode}_score", item.score)
+        if self.min_vector_score is not None:
+            # Relevance floor: a chunk only the vector side found must be similar enough. Keyword
+            # matches always stay (an exact term hit is evidence on its own).
+            kept = [
+                c
+                for c in ranked
+                if c.keyword_rank is not None or (c.vector_score or 0) >= self.min_vector_score
+            ]
+            diag.below_threshold_removed = len(ranked) - len(kept)
+            ranked = kept
         results, diag.duplicates_removed = dedupe(ranked, hashes)
         diag.total_ms = (time.perf_counter() - start) * 1000
         return RetrievalResult(query=query, results=results[:top_k], diagnostics=diag)

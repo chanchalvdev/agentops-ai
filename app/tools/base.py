@@ -5,6 +5,7 @@ model may *request* a tool; only the harness validates, authorizes, and executes
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel
@@ -34,6 +35,12 @@ class Tool[I: BaseModel, O: BaseModel](ABC):
         loop, which cannot pause, drops such tools); a tool can relax it for safe arguments.
         Raising an AppError here rejects the call before anyone is asked to approve it."""
         return self.requires_approval
+
+    async def cache_key(self, args: I, ctx: "ExecutionContext") -> Hashable | None:
+        """What the result depends on besides tenant, permissions, and arguments (the harness
+        adds those), e.g. the corpus version. None = never cache. Only idempotent tools that need
+        no approval are ever looked up."""
+        return None
 
     def ledger_arguments(self, args: I) -> dict[str, Any]:
         """Arguments as stored in the ledger and traces. Override to drop bulky or sensitive

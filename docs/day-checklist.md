@@ -190,5 +190,55 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [ ] Judge sees 300-char snippets only and cannot see workspace state (5/5 on the false `ws-edit-approved` report) → advisory only, Day 4
 - [ ] `datasets/corpus` now includes the prompt-injection doc, so `agentops ingest datasets/corpus` loads it for tenant_a too (intended as an adversarial fixture)
 
+## Day 4 — Optimization, drift, hardening (done Fri 13 Nov, branch `day-4-optimization-drift-hardening`, uncommitted)
+
+### Optimization (M9)
+- [x] Graph switches resolved once into `AgentTuning` (all default to Day 3 behaviour): query rewrite, search top_k, evidence cap, rule routing, small-model drafts
+- [x] Rule routing (`policies.py`, written on 30 Oct, now wired): code decides `needs_tools`; calculator nudge when a calculation question got no calculator call
+- [x] Total evidence cap in answer/tool prompts; only shown passages are citable (Day 2 deferral)
+- [x] `insufficient_evidence` drafts return fixed text, never unverified model claims (Day 2/3 deferral, eval case `tool-rto-diff`)
+- [x] Caches: query embeddings (tenant+model+text), tool results (tenant+permissions+args+corpus version+retrieval config), semantic answer cache (off; verified read-only graph answers only; threshold 0.97; scope includes corpus version + config fingerprint)
+- [x] Corpus version read from the database, so a CLI ingest in another process invalidates the API's caches
+- [x] Usage accounting from the ledger: retries, failed calls, embedding calls, cache hits, hosted-equivalent cost (only with configured reference prices, labelled hypothetical)
+- [x] Eval aggregates: cost/request, cost/successful task, tokens/request and /success, retry rate, cache hits, judge quality score; per-case cost + usage persisted (migration 0005, Day 3 deferral)
+- [x] Experiment profiles (`datasets/experiments.json`, allowlisted overrides only), runner, benchmark verdict, CLI + API
+- [x] Relevance threshold measured, not adopted: top vector score overlaps (unanswerable up to 0.766, answerable down to 0.651)
+- [x] Live benchmark ([docs/benchmarks/day4.md](benchmarks/day4.md)): **`optimized` accepted** — 36/38 vs 33/38, no newly failing case, tokens/request −21%, qwen3:8b calls/request 3.03 → 2.76, p50 43.1 → 27.5 s (−36%), p95 65.4 → 60.0 s (−8%), tool_use 2/5 → 5/5
+- [x] Rejected by the gate and kept as evidence: query rewrite off (`optimized-no-rewrite`, multi_document 4/5 → 2/5); rule routing that also skipped comparisons (`multi-availability` 0/3 vs 3/3) → comparisons keep the tool-selection step
+- [x] Temperature 0 makes quality deterministic (baseline re-run 23 h later: identical answers and tokens); latency is not (same baseline p50 60.6 s vs 43.1 s), so the compared runs ran back to back
+- [x] Committed baselines: `golden-v1-graph-qwen3-8b-day4.json` (baseline), `-optimized.json`, `retrieval-golden-v1.json`; monitoring defaults point at them
+
+### Drift and monitoring (M10)
+- [x] Retrieval-only evaluation of the golden set: hit@k, recall@k, MRR, source distribution, and **answer coverage@k** (file-level metrics saturate on this 5-document corpus)
+- [x] Deterministic detector over quality, retrieval, data, and operational signals; every breach labelled `measured` or `suspected`; no data = `insufficient_data`, never "ok"
+- [x] `drift_checks` + `monitoring_alerts` tables (migration 0005), thresholds in `datasets/drift_thresholds.json`
+- [x] API: `GET /api/v1/metrics`, `GET /monitoring/summary`, `GET /monitoring/drift`, `GET /monitoring/alerts`, `POST /monitoring/check`; CLI `agentops drift check` (exit 1 on measured drift), `agentops metrics`
+- [x] Answer coverage counts only passages from the expected documents (a "15 minutes" match in the failover runbook was making `multi-rpo-change` look covered; found while explaining the rejected no-rewrite profile)
+- [x] Mixed embedding/chunking signals are per tenant (the experiment's `eval_degraded_chunks` tenant legitimately uses another chunking config)
+- [x] Live demo (`reports/drift-degraded.txt`): degraded-chunking vs the Day 4 baseline → **drift**, exit 1: pass rate 0.868 → 0.816 (measured), answer coverage 0.971 → 0.882 (measured, message names the changed chunk/retrieval config); recall@k and hit rate stay 1.0, as predicted
+- [x] Operational window also flagged tokens/execution 751 → 3,516: the previous 24 h was the provider outage (83% failures, 52% provider errors), so this is recovery, not a regression — the detector reports what changed, a human reads why
+
+### Hardening (M11)
+- [x] Rate limiting: per-tenant token buckets per route class, 429 + `Retry-After` (in-process; documented)
+- [x] Operator-only (admin tenants) evaluations, experiments, and monitoring (Day 3 deferral "any tenant can start a run")
+- [x] Dockerfile (non-root, healthcheck, migrations at start) + compose `api` profile; CI adds a docker build job and gates the committed benchmark
+- [x] Image verified locally: `docker build` OK (919 MB), `agentops --help` runs as uid 10001; `docker compose --profile app up -d api` runs migrations, `/health` ok, `/ready` reports database ok and Ollama unreachable when Ollama listens on loopback only (documented)
+- [x] CI gates both committed live runs: Day 3 baseline self-check and `optimized` vs the Day 4 baseline (passes)
+
+### Verification
+- [x] Recorder review fixes: drift status `insufficient_data` when nothing could be measured (was `ok`); `/retrieval/search` rate limited (each query embeds)
+- [x] 370 tests (`-W error`), ruff, ruff format, mypy strict clean
+- [x] Live runs on qwen3:8b / qwen3:1.7b (Ollama on :11435; :11434 belongs to another project's container without these models)
+
+### Deferred (tracked)
+- [ ] Caches showed ~0 hits in the benchmark (each golden question runs once); their value is for repeated questions and is shown by unit/integration tests only, not measured live
+- [ ] `multi-retention` (both profiles) and `ws-edit-approved` (false "could not" after a retried edit) still fail
+- [ ] Loop-mode baseline still not run (graph only)
+- [ ] Rate limits and caches are per process (Redis for multiple replicas); the WebSocket terminal is not rate limited
+- [ ] Relevance floor stays off: the measured score ranges overlap
+- [ ] Drift detector: no newly-failing-case rule (a one-case regression only shows in the benchmark/eval gate); alerts cannot be acknowledged yet; the default eval head can be an experiment run
+- [ ] Compose `api` defaults Ollama to host :11434 (on this machine that is another project's Ollama); CI gates committed reports only, it never runs the models
+- [ ] Benchmark latency is sensitive to machine state (swap reached 9 GB with another project's containers running); token and call counts are the machine-independent signal
+
 ## Day 4 — original plan (Sat 24 Oct)
 ## Day 5 — UI + end-to-end demo (Sun 25 Oct)

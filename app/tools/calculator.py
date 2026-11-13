@@ -3,7 +3,7 @@
 import ast
 import math
 import operator
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
@@ -109,6 +109,10 @@ class Calculator(Tool[CalculatorInput, CalculatorOutput]):
         "doing arithmetic yourself."
     )
     input_model = CalculatorInput
+
+    async def cache_key(self, args: CalculatorInput, ctx: ExecutionContext) -> Hashable | None:
+        return "pure"  # depends on the expression only
+
     output_model = CalculatorOutput
     permissions: ClassVar[frozenset[str]] = frozenset()
     timeout_s = 2.0

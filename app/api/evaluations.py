@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import PrincipalDep, ServicesDep
+from app.api.deps import AdminDep, ServicesDep, rate_limited
 from app.core.errors import ConflictError, NotFoundError
 from app.evaluation.dataset import Category, Mode, load_dataset
 from app.evaluation.regression import Comparison, compare, load_thresholds
@@ -55,9 +55,10 @@ class EvaluationRunOut(BaseModel):
     "/run",
     status_code=202,
     response_model=EvaluationRunStarted,
+    dependencies=[rate_limited("expensive")],
 )
 async def run_evaluation(
-    body: EvaluationRunRequest, services: ServicesDep, principal: PrincipalDep
+    body: EvaluationRunRequest, services: ServicesDep, principal: AdminDep
 ) -> EvaluationRunStarted:
     if services.eval_task is not None and not services.eval_task.done():
         raise ConflictError("An evaluation run is already in progress")
@@ -87,19 +88,19 @@ async def run_evaluation(
 
 @router.get("/runs", response_model=list[EvaluationRunOut])
 async def list_runs(
-    services: ServicesDep, principal: PrincipalDep, limit: int = Query(default=20, ge=1, le=100)
+    services: ServicesDep, principal: AdminDep, limit: int = Query(default=20, ge=1, le=100)
 ) -> Any:
     return await EvaluationStore(services.sessions).list_runs(principal.tenant_id, limit)
 
 
 @router.get("/runs/{run_id}", response_model=RunReport, summary="Run with per-case results")
-async def get_run(run_id: uuid.UUID, services: ServicesDep, principal: PrincipalDep) -> RunReport:
+async def get_run(run_id: uuid.UUID, services: ServicesDep, principal: AdminDep) -> RunReport:
     return await EvaluationStore(services.sessions).report(principal.tenant_id, run_id)
 
 
 @router.get("/compare", response_model=Comparison, summary="Compare two runs; lists breaches")
 async def compare_runs(
-    base: uuid.UUID, head: uuid.UUID, services: ServicesDep, principal: PrincipalDep
+    base: uuid.UUID, head: uuid.UUID, services: ServicesDep, principal: AdminDep
 ) -> Comparison:
     store = EvaluationStore(services.sessions)
     thresholds = services.settings.eval_datasets_dir / "eval_thresholds.json"

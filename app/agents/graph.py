@@ -30,6 +30,7 @@ from app.agents.evidence import EvidenceStore, FinalAnswer
 from app.agents.harness import Harness
 from app.agents.result import AgentRunResult, RunStatus, build_result
 from app.agents.state import AgentState, GraphDeps
+from app.agents.tuning import AgentTuning
 from app.core.errors import ConflictError
 from app.core.execution_context import ExecutionContext
 
@@ -77,10 +78,12 @@ class GraphRunner:
         checkpointer: BaseCheckpointSaver[Any] | None,
         *,
         max_output_tokens: int = 1024,
+        tuning: AgentTuning | None = None,
     ) -> None:
         self.harness = harness
         self.graph = build_graph(checkpointer)
         self._max_output_tokens = max_output_tokens
+        self.tuning = tuning or AgentTuning()
 
     def _config(self, ctx: ExecutionContext) -> RunnableConfig:
         # Recursion limit is a backstop only; the harness step budget stops runs first.
@@ -90,7 +93,7 @@ class GraphRunner:
         }
 
     def _deps(self, ctx: ExecutionContext) -> GraphDeps:
-        return GraphDeps(self.harness, ctx, self._max_output_tokens)
+        return GraphDeps(self.harness, ctx, self._max_output_tokens, self.tuning)
 
     @staticmethod
     def for_graph(ctx: ExecutionContext) -> ExecutionContext:

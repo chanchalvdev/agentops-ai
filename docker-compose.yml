@@ -17,5 +17,24 @@ services:
       timeout: 3s
       retries: 30
 
+  # The API in a container: `docker compose --profile app up -d --build`. Ollama stays on the
+  # host (native, GPU-accelerated); the container reaches it at host.docker.internal.
+  api:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      AGENTOPS_ENV: ${AGENTOPS_ENV:-dev}
+      AGENTOPS_DATABASE_URL: postgresql+asyncpg://agentops:agentops@db:5432/agentops
+      AGENTOPS_OLLAMA_BASE_URL: ${AGENTOPS_OLLAMA_BASE_URL_FROM_DOCKER:-http://host.docker.internal:11434}
+      AGENTOPS_API_KEYS: ${AGENTOPS_API_KEYS:-}
+    ports:
+      - "${AGENTOPS_API_PORT:-8000}:8000"
+    volumes:
+      - workspace:/data/workspace
+
 volumes:
   pgdata:
+  workspace:

@@ -281,3 +281,50 @@ class EvaluationResult(Base):
     judge: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     failures: Mapped[list[str]] = mapped_column(JSONB, default=list)
     answer: Mapped[str | None] = mapped_column(Text)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class RetrievalEvalRun(Base):
+    """Retrieval-only evaluation of the golden set: recall@k, hit rate, MRR, source mix."""
+
+    __tablename__ = "retrieval_eval_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    requested_by: Mapped[str] = mapped_column(String(64))
+    dataset_name: Mapped[str] = mapped_column(String(100))
+    dataset_version: Mapped[str] = mapped_column(String(50))
+    dataset_sha256: Mapped[str] = mapped_column(String(64))
+    profile: Mapped[str | None] = mapped_column(String(64))
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    cases: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DriftCheck(Base):
+    __tablename__ = "drift_checks"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    requested_by: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))  # ok | drift | suspected
+    baseline: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    signals: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MonitoringAlert(Base):
+    __tablename__ = "monitoring_alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    check_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("drift_checks.id", ondelete="CASCADE"))
+    category: Mapped[str] = mapped_column(String(16))  # quality | retrieval | data | operational
+    metric: Mapped[str] = mapped_column(String(100))
+    severity: Mapped[str] = mapped_column(String(16))
+    evidence: Mapped[str] = mapped_column(String(16))  # measured | suspected
+    baseline_value: Mapped[float | None] = mapped_column()
+    current_value: Mapped[float | None] = mapped_column()
+    threshold: Mapped[str] = mapped_column(String(100))
+    message: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

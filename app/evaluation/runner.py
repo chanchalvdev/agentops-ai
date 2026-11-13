@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.agents import custom_loop, graph, nodes
 from app.agents.result import AgentRunResult
+from app.agents.tuning import AgentTuning
 from app.core.security import DOCUMENT_PERMISSIONS, WORKSPACE_PERMISSIONS
 from app.evaluation.dataset import Dataset, EvalCase, Mode
 from app.evaluation.evaluators import CaseRun, EvaluatorResult, evaluate
@@ -25,6 +26,7 @@ from app.evaluation.judge import JUDGE_VERSION, judge
 from app.evaluation.report import CaseReport, DatasetInfo, RunReport, aggregate
 from app.evaluation.store import EvaluationStore
 from app.ingestion.parsers import SUPPORTED_TYPES
+from app.monitoring.cost import summarize
 from app.observability.interfaces import Score
 
 if TYPE_CHECKING:
@@ -57,6 +59,15 @@ def run_config(services: "Services", mode: Mode, use_judge: bool) -> dict[str, A
             "chunk_strategy": s.chunk_strategy,
             "chunk_size_chars": s.chunk_size_chars,
             "chunk_overlap_chars": s.chunk_overlap_chars,
+            "mode": s.retrieval_mode,
+            "min_vector_score": s.retrieval_min_vector_score,
+        },
+        "tuning": AgentTuning.from_settings(s).as_dict(),
+        "caches": {
+            "query_embeddings": s.cache_query_embeddings,
+            "tool_results": s.cache_tool_results,
+            "semantic": s.semantic_cache_enabled,
+            "semantic_min_similarity": s.semantic_cache_min_similarity,
         },
         "judge": JUDGE_VERSION if use_judge else None,
         "eval_tenant": s.eval_tenant,
@@ -167,6 +178,11 @@ class EvaluationRunner:
             model_calls=result.model_calls,
             tool_calls=result.tool_calls,
             cost_usd=None if result.cost_usd is None else float(result.cost_usd),
+            usage=summarize(
+                result.ledger,
+                self.s.settings.reference_price_input_per_mtok,
+                self.s.settings.reference_price_output_per_mtok,
+            ),
             evaluators=evaluations,
             failures=failures,
             answer=result.answer[:2000],
@@ -215,6 +231,7 @@ class EvaluationRunner:
         corpus_dirs: list[Path] | None = None,
         on_case: Callable[[CaseReport], None] | None = None,
         on_start: Callable[[uuid.UUID], None] | None = None,
+        profile: str | None = None,
     ) -> RunReport:
         cases = [
             c
@@ -224,6 +241,7 @@ class EvaluationRunner:
         await self.prepare_corpus(corpus_dirs or self.s.settings.eval_corpus_dirs)
         config = run_config(self.s, mode, use_judge)
         config["case_filter"] = {"ids": case_ids, "categories": categories}
+        config["profile"] = profile  # experiment profile name (datasets/experiments.json)
         dataset_id = await self.store.upsert_dataset(dataset)
         row = await self.store.start_run(dataset_id, requested_by, mode, config)
         if on_start:

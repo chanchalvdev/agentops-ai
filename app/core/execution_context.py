@@ -18,7 +18,9 @@ from app.core.budgets import BudgetCounters, ExecutionLimits
 from app.core.security import DOCUMENT_PERMISSIONS
 from app.llm.schemas import Usage
 
-EventKind = Literal["step", "model_call", "tool_call", "correction", "policy", "approval", "final"]
+EventKind = Literal[
+    "step", "model_call", "tool_call", "correction", "policy", "approval", "cache", "final"
+]
 EventStatus = Literal["ok", "error", "rejected", "pending"]
 
 DEFAULT_PERMISSIONS = DOCUMENT_PERMISSIONS

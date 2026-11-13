@@ -1,0 +1,475 @@
+{
+  "run_id": "a3bbcf41-179d-4a58-80e1-bfb3b66089ea",
+  "dataset": {
+    "name": "golden_questions",
+    "version": "golden-v1",
+    "sha256": "b73f3c122273398d2a62b80e67936daae053047929ae68e99f4b1fc263e5a7a5"
+  },
+  "profile": "baseline",
+  "config": {
+    "mode": "hybrid",
+    "candidate_k": 30,
+    "rrf_k": 60,
+    "min_vector_score": null,
+    "embedding_model": "nomic-embed-text",
+    "top_k": 5,
+    "chunk_strategy": "structured",
+    "chunk_size_chars": 1200,
+    "chunk_overlap_chars": 200,
+    "eval_tenant": "eval"
+  },
+  "metrics": {
+    "cases": 21,
+    "k": 5,
+    "hit_rate": 1.0,
+    "recall_at_k": 1.0,
+    "mrr": 0.9524,
+    "answer_coverage": 0.9706,
+    "answer_cases": 17,
+    "answer_misses": [
+      "multi-rpo-change"
+    ],
+    "empty_results": 0,
+    "source_distribution": {
+      "adr-003-vector-store.md": 0.0571,
+      "payments-architecture-v1.md": 0.3143,
+      "payments-architecture-v2.md": 0.3714,
+      "runbook-database-failover.md": 0.1714,
+      "vendor-notice-card-vault.md": 0.0857
+    },
+    "latency_ms": {
+      "p50": 168.2,
+      "p95": 194.7
+    },
+    "misses": []
+  },
+  "cases": [
+    {
+      "id": "ans-rpo-v2",
+      "category": "answerable",
+      "expected": [
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "runbook-database-failover.md",
+        "vendor-notice-card-vault.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 0.5,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 753.2
+    },
+    {
+      "id": "ans-rto-v2",
+      "category": "answerable",
+      "expected": [
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "runbook-database-failover.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 0.5,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 167.1
+    },
+    {
+      "id": "ans-tps-v2",
+      "category": "answerable",
+      "expected": [
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "runbook-database-failover.md",
+        "payments-architecture-v2.md",
+        "vendor-notice-card-vault.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 187.9
+    },
+    {
+      "id": "ans-latency-v1",
+      "category": "answerable",
+      "expected": [
+        "payments-architecture-v1.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "runbook-database-failover.md",
+        "vendor-notice-card-vault.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 172.2
+    },
+    {
+      "id": "ans-alert",
+      "category": "answerable",
+      "expected": [
+        "runbook-database-failover.md"
+      ],
+      "retrieved": [
+        "runbook-database-failover.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 186.1
+    },
+    {
+      "id": "ans-promote-cmd",
+      "category": "answerable",
+      "expected": [
+        "runbook-database-failover.md"
+      ],
+      "retrieved": [
+        "runbook-database-failover.md",
+        "payments-architecture-v2.md",
+        "runbook-database-failover.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 164.7
+    },
+    {
+      "id": "ans-escalation",
+      "category": "answerable",
+      "expected": [
+        "runbook-database-failover.md"
+      ],
+      "retrieved": [
+        "runbook-database-failover.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "runbook-database-failover.md",
+        "payments-architecture-v2.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 2,
+      "answer_covered": 2,
+      "latency_ms": 140.4
+    },
+    {
+      "id": "ans-adr-decision",
+      "category": "answerable",
+      "expected": [
+        "adr-003-vector-store.md"
+      ],
+      "retrieved": [
+        "adr-003-vector-store.md",
+        "adr-003-vector-store.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "vendor-notice-card-vault.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 177.0
+    },
+    {
+      "id": "ans-adr-revisit",
+      "category": "answerable",
+      "expected": [
+        "adr-003-vector-store.md"
+      ],
+      "retrieved": [
+        "adr-003-vector-store.md",
+        "adr-003-vector-store.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v2.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 169.1
+    },
+    {
+      "id": "ans-postmortem",
+      "category": "answerable",
+      "expected": [
+        "runbook-database-failover.md"
+      ],
+      "retrieved": [
+        "runbook-database-failover.md",
+        "runbook-database-failover.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v2.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 159.8
+    },
+    {
+      "id": "ans-migration",
+      "category": "answerable",
+      "expected": [
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v2.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "adr-003-vector-store.md",
+        "vendor-notice-card-vault.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 2,
+      "answer_covered": 2,
+      "latency_ms": 147.0
+    },
+    {
+      "id": "multi-rpo-change",
+      "category": "multi_document",
+      "expected": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "runbook-database-failover.md",
+        "vendor-notice-card-vault.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 2,
+      "answer_covered": 1,
+      "latency_ms": 154.0
+    },
+    {
+      "id": "multi-retention",
+      "category": "multi_document",
+      "expected": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "runbook-database-failover.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 2,
+      "answer_covered": 2,
+      "latency_ms": 173.5
+    },
+    {
+      "id": "multi-latency",
+      "category": "multi_document",
+      "expected": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "vendor-notice-card-vault.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 2,
+      "answer_covered": 2,
+      "latency_ms": 162.6
+    },
+    {
+      "id": "multi-availability",
+      "category": "multi_document",
+      "expected": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "runbook-database-failover.md",
+        "payments-architecture-v2.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 2,
+      "answer_covered": 2,
+      "latency_ms": 194.7
+    },
+    {
+      "id": "multi-failover",
+      "category": "multi_document",
+      "expected": [
+        "runbook-database-failover.md"
+      ],
+      "retrieved": [
+        "runbook-database-failover.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v2.md",
+        "runbook-database-failover.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 1,
+      "answer_covered": 1,
+      "latency_ms": 159.1
+    },
+    {
+      "id": "tool-rpo-seconds",
+      "category": "tool_use",
+      "expected": [
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "runbook-database-failover.md",
+        "payments-architecture-v1.md",
+        "vendor-notice-card-vault.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 0,
+      "answer_covered": 0,
+      "latency_ms": 177.8
+    },
+    {
+      "id": "tool-rto-diff",
+      "category": "tool_use",
+      "expected": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 0,
+      "answer_covered": 0,
+      "latency_ms": 168.2
+    },
+    {
+      "id": "tool-tps-ratio",
+      "category": "tool_use",
+      "expected": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 0,
+      "answer_covered": 0,
+      "latency_ms": 161.9
+    },
+    {
+      "id": "tool-settlement-seconds",
+      "category": "tool_use",
+      "expected": [
+        "payments-architecture-v2.md"
+      ],
+      "retrieved": [
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "runbook-database-failover.md",
+        "payments-architecture-v1.md",
+        "adr-003-vector-store.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 0,
+      "answer_covered": 0,
+      "latency_ms": 173.5
+    },
+    {
+      "id": "adv-injected-doc",
+      "category": "adversarial",
+      "expected": [
+        "vendor-notice-card-vault.md"
+      ],
+      "retrieved": [
+        "vendor-notice-card-vault.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md",
+        "payments-architecture-v1.md",
+        "payments-architecture-v2.md"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "reciprocal_rank": 1.0,
+      "answer_groups": 2,
+      "answer_covered": 2,
+      "latency_ms": 131.6
+    }
+  ],
+  "created_at": "2026-11-13T05:14:48.175196Z"
+}

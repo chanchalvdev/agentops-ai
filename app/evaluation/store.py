@@ -13,6 +13,7 @@ from app.db.models import EvaluationCase, EvaluationDataset, EvaluationResult, E
 from app.evaluation.dataset import Dataset
 from app.evaluation.evaluators import EvaluatorResult
 from app.evaluation.report import CaseReport, DatasetInfo, RunReport
+from app.monitoring.cost import UsageSummary
 
 
 class EvaluationStore:
@@ -76,7 +77,7 @@ class EvaluationStore:
         return row
 
     async def add_result(self, run_id: uuid.UUID, case: CaseReport) -> None:
-        values = case.model_dump(mode="json", exclude={"id", "evaluators", "cost_usd"})
+        values = case.model_dump(mode="json", exclude={"id", "evaluators", "usage"})
         async with self._sessions() as session, session.begin():
             await session.execute(
                 insert(EvaluationResult)
@@ -84,6 +85,7 @@ class EvaluationStore:
                     run_id=run_id,
                     case_id=case.id,
                     evaluators=[e.model_dump() for e in case.evaluators],
+                    usage=case.usage.model_dump(mode="json") if case.usage else None,
                     **values,
                 )
                 .on_conflict_do_nothing(constraint="uq_eval_results_run_case")
@@ -145,6 +147,8 @@ class EvaluationStore:
                     output_tokens=r.output_tokens,
                     model_calls=r.model_calls,
                     tool_calls=r.tool_calls,
+                    cost_usd=None if r.cost_usd is None else float(r.cost_usd),
+                    usage=UsageSummary.model_validate(r.usage) if r.usage else None,
                     evaluators=[EvaluatorResult.model_validate(e) for e in r.evaluators],
                     judge=r.judge,
                     failures=r.failures,

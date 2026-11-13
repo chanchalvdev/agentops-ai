@@ -5,6 +5,7 @@ production code.
 """
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,13 +17,18 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.agents import custom_loop, nodes
 from app.agents.custom_loop import AgentLoop
 from app.agents.graph import GraphRunner
 from app.agents.harness import Harness
+from app.agents.semantic_cache import SemanticCache
 from app.agents.service import AgentService
 from app.agents.store import ApprovalStore, ExecutionStore
+from app.agents.tuning import AgentTuning
 from app.core.budgets import ExecutionLimits
+from app.core.cache import TTLCache
 from app.core.config import Settings
+from app.core.ratelimit import RateLimiter
 from app.core.security import ApiKeyAuthenticator
 from app.db.session import make_engine, make_sessionmaker
 from app.ingestion.embeddings import Embedder, FakeEmbedder, OllamaEmbedder
@@ -71,6 +77,7 @@ class Services:
     workspaces: WorkspaceManager
     workspace_audit: DbAudit
     telemetry: Telemetry
+    rate_limiter: RateLimiter
     eval_task: "asyncio.Task[Any] | None" = None  # the one evaluation run allowed at a time
     _graph: GraphRunner | None = None
     _pool: AsyncConnectionPool[Any] | None = None
@@ -107,7 +114,10 @@ class Services:
         else:
             saver = InMemorySaver()
         self._graph = GraphRunner(
-            self.harness, saver, max_output_tokens=self.settings.llm_max_output_tokens
+            self.harness,
+            saver,
+            max_output_tokens=self.settings.llm_max_output_tokens,
+            tuning=AgentTuning.from_settings(self.settings),
         )
 
     async def aclose(self) -> None:
@@ -119,6 +129,27 @@ class Services:
             await self._pool.close()
         await self.http.aclose()
         await self.engine.dispose()
+
+
+def config_fingerprint(settings: Settings) -> str:
+    """Everything an answer depends on besides the question and the corpus. Part of every
+    answer-cache key, so changing a model, prompt, or retrieval setting never serves old answers."""
+    keys = (
+        "llm_model_main",
+        "llm_model_small",
+        "embedding_model",
+        "chunk_strategy",
+        "chunk_size_chars",
+        "chunk_overlap_chars",
+        "retrieval_mode",
+        "retrieval_min_vector_score",
+        "retrieval_candidate_k",
+        "rrf_k",
+    )
+    parts = {k: getattr(settings, k) for k in keys}
+    parts["tuning"] = AgentTuning.from_settings(settings).as_dict()
+    parts["prompts"] = [nodes.PROMPT_VERSION, custom_loop.PROMPT_VERSION]
+    return json.dumps(parts, sort_keys=True, default=str)
 
 
 def build_router(
@@ -187,8 +218,18 @@ def build_services(
             )
         )
     llm = build_router(settings, http, llm_provider)
+
+    def cache[V]() -> TTLCache[V]:
+        return TTLCache(settings.cache_max_entries, settings.cache_ttl_s)
+
     retriever = HybridRetriever(
-        sessions, embedder, candidate_k=settings.retrieval_candidate_k, rrf_k=settings.rrf_k
+        sessions,
+        embedder,
+        candidate_k=settings.retrieval_candidate_k,
+        rrf_k=settings.rrf_k,
+        default_mode=settings.retrieval_mode,
+        min_vector_score=settings.retrieval_min_vector_score,
+        query_cache=cache() if settings.cache_query_embeddings else None,
     )
     ingestion = IngestionService(sessions, embedder, settings)
     workspace_audit = DbAudit(sessions)
@@ -202,13 +243,13 @@ def build_services(
     )
     tools = ToolRegistry(
         [
-            DocumentSearch(retriever),
+            DocumentSearch(retriever, corpus_version=ingestion.corpus_version),
             Calculator(),
             DocumentMetadata(ingestion),
             *workspace_tools(workspaces),
         ]
     )
-    harness = Harness(llm, tools)
+    harness = Harness(llm, tools, cache() if settings.cache_tool_results else None)
     agent_loop = AgentLoop(
         harness,
         max_context_chars=settings.agent_max_context_chars,
@@ -216,6 +257,18 @@ def build_services(
     )
     executions, approvals = ExecutionStore(sessions), ApprovalStore(sessions)
     telemetry = build_telemetry(settings, http)
+    semantic_cache = (
+        SemanticCache(
+            embedder,
+            ingestion.corpus_version,
+            config_fingerprint(settings),
+            min_similarity=settings.semantic_cache_min_similarity,
+            ttl_s=settings.semantic_cache_ttl_s,
+            max_entries=settings.cache_max_entries,
+        )
+        if settings.semantic_cache_enabled
+        else None
+    )
     services: Services
     agents = AgentService(
         agent_loop,
@@ -225,6 +278,7 @@ def build_services(
         approvals,
         ExecutionLimits.from_settings(settings),
         telemetry,
+        semantic_cache,
     )
     services = Services(
         settings=settings,
@@ -252,5 +306,13 @@ def build_services(
         workspaces=workspaces,
         workspace_audit=workspace_audit,
         telemetry=telemetry,
+        rate_limiter=RateLimiter(
+            {
+                "agent": settings.rate_limit_agent_per_min,
+                "upload": settings.rate_limit_upload_per_min,
+                "expensive": settings.rate_limit_expensive_per_min,
+                "workspace": settings.rate_limit_workspace_per_min,
+            }
+        ),
     )
     return services

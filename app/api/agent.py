@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.result import AgentRunResult
 from app.agents.service import LimitOverrides, Mode
-from app.api.deps import PrincipalDep, ServicesDep
+from app.api.deps import PrincipalDep, ServicesDep, rate_limited
 
 router = APIRouter(prefix="/api/v1", tags=["agent"])
 
@@ -88,7 +88,12 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
-@router.post("/agent/run", response_model=AgentRunResult, summary="Run the agent to completion")
+@router.post(
+    "/agent/run",
+    response_model=AgentRunResult,
+    summary="Run the agent to completion",
+    dependencies=[rate_limited("agent")],
+)
 async def run_agent(
     body: AgentRunRequest, request: Request, services: ServicesDep, principal: PrincipalDep
 ) -> AgentRunResult:
@@ -110,6 +115,7 @@ async def run_agent(
         "happen; then one `citation` per cited source and a closing `final` with the full result "
         "(or `error`). A `: keep-alive` comment is sent after 15 s without events."
     ),
+    dependencies=[rate_limited("agent")],
 )
 async def run_agent_stream(
     body: AgentRunRequest, request: Request, services: ServicesDep, principal: PrincipalDep
@@ -180,6 +186,7 @@ async def list_approvals(
     "/approvals/{approval_id}/approve",
     response_model=AgentRunResult,
     summary="Approve a paused tool call and resume the execution from its checkpoint",
+    dependencies=[rate_limited("agent")],
 )
 async def approve(
     approval_id: uuid.UUID,
@@ -201,6 +208,7 @@ async def approve(
     "/approvals/{approval_id}/reject",
     response_model=AgentRunResult,
     summary="Reject a paused tool call; the run resumes without executing it",
+    dependencies=[rate_limited("agent")],
 )
 async def reject(
     approval_id: uuid.UUID,

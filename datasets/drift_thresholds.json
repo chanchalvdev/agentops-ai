@@ -1,0 +1,26 @@
+{
+  "min_eval_cases": 10,
+  "max_pass_rate_drop": 0.05,
+  "max_category_drop": 0.25,
+  "max_quality_score_drop": 0.1,
+  "zero_tolerance_evaluators": [
+    "unauthorized_tools",
+    "workspace_effects"
+  ],
+  "min_retrieval_cases": 10,
+  "max_recall_drop": 0.05,
+  "max_hit_rate_drop": 0.05,
+  "max_mrr_drop": 0.05,
+  "max_answer_coverage_drop": 0.05,
+  "max_source_shift": 0.25,
+  "max_corpus_change": 0.25,
+  "max_ingestion_failure_rate": 0.1,
+  "window_hours": 24,
+  "min_executions": 20,
+  "max_p95_latency_increase": 0.5,
+  "max_timeout_rate": 0.05,
+  "max_failure_rate": 0.1,
+  "max_provider_error_rate": 0.05,
+  "max_retry_rate": 0.1,
+  "max_tokens_increase": 0.3
+}

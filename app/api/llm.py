@@ -4,7 +4,7 @@ from typing import Any, Literal
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.api.deps import PrincipalDep, ServicesDep
+from app.api.deps import PrincipalDep, ServicesDep, rate_limited
 from app.llm.schemas import LLMRequest, Message, ModelRole, Usage
 from app.llm.usage import estimate_cost
 
@@ -48,6 +48,7 @@ class ModelInfo(BaseModel):
     "/llm/chat",
     response_model=ChatResponse,
     summary="Direct, bounded model call with usage, cost, and latency metadata",
+    dependencies=[rate_limited("agent")],
 )
 async def chat(body: ChatRequest, services: ServicesDep, principal: PrincipalDep) -> ChatResponse:
     s = services.settings

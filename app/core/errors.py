@@ -53,6 +53,16 @@ class PermissionDeniedError(AppError):
     code, status_code = "permission_denied", 403
 
 
+class TooManyRequestsError(AppError):
+    """The caller exceeded its request rate (our limit, not a provider's)."""
+
+    code, status_code = "too_many_requests", 429
+
+    def __init__(self, message: str, *, retry_after_s: float) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
+
+
 # --- Provider (LLM / embedding) errors -------------------------------------------------------
 
 

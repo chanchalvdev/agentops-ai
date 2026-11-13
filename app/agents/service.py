@@ -13,16 +13,18 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, Field
 
 from app.agents.custom_loop import AgentLoop
-from app.agents.evidence import EvidenceStore
+from app.agents.evidence import EvidenceStore, FinalAnswer, ToolReference
 from app.agents.graph import GraphRunner
 from app.agents.result import AgentRunResult, build_result
 from app.agents.store import ApprovalStore, ExecutionStore
 from app.core.budgets import ExecutionLimits
 from app.core.errors import AppError, ConflictError, InvalidRequestError, NotFoundError
 from app.core.execution_context import DEFAULT_PERMISSIONS, ExecutionContext, LedgerEvent
+from app.rag.answer import Citation
 from app.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from app.agents.semantic_cache import CachedAnswer, SemanticCache
     from app.observability.telemetry import Telemetry
 
 logger = logging.getLogger(__name__)
@@ -50,11 +52,13 @@ class AgentService:
         approvals: ApprovalStore,
         default_limits: ExecutionLimits,
         telemetry: "Telemetry | None" = None,
+        semantic_cache: "SemanticCache | None" = None,
     ) -> None:
         self._loop, self._graph, self._tools = loop, graph, tools
         self.executions, self.approvals = executions, approvals
         self._defaults = default_limits
         self._telemetry = telemetry
+        self.semantic_cache = semantic_cache
 
     def new_context(
         self,
@@ -86,8 +90,47 @@ class AgentService:
 
     async def run(self, ctx: ExecutionContext, mode: Mode, question: str) -> AgentRunResult:
         await self.executions.start(ctx, mode, question)
-        return await self._execute(
+        cache = self.semantic_cache
+        lookup = None
+        if cache is not None:
+            try:
+                lookup = await cache.lookup(ctx, mode, question)
+            except Exception:  # a cache outage only costs the saving, never the answer
+                logger.warning("semantic cache lookup failed", exc_info=True)
+        if lookup is not None and lookup[0] is not None:
+            hit = lookup[0]
+            return await self._execute(
+                ctx, mode, lambda: self._from_cache(ctx, mode, hit), question=question
+            )
+        result = await self._execute(
             ctx, mode, lambda: self._start(ctx, mode, question), question=question
+        )
+        if cache is not None and lookup is not None:
+            cache.store(lookup[1], lookup[2], question, result)
+        return result
+
+    async def _from_cache(
+        self, ctx: ExecutionContext, mode: Mode, hit: "CachedAnswer"
+    ) -> AgentRunResult:
+        ctx.record(
+            "cache",
+            "semantic_cache",
+            "ok",
+            data={
+                "similarity": hit.similarity,
+                "source_execution_id": hit.source_execution_id,
+            },
+        )
+        ctx.workflow_state = "answered"
+        result = build_result(
+            ctx, mode, EvidenceStore(), "answered", final=FinalAnswer(answer=hit.answer)
+        )
+        return result.model_copy(
+            update={
+                "citations": [Citation.model_validate(c) for c in hit.citations],
+                "tool_references": [ToolReference.model_validate(t) for t in hit.tool_references],
+                "verification": "supported",  # verified when it was first answered
+            }
         )
 
     async def stream(

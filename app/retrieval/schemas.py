@@ -51,6 +51,8 @@ class RetrievalDiagnostics(BaseModel):
     vector_candidates: int = 0
     keyword_candidates: int = 0
     duplicates_removed: int = 0
+    below_threshold_removed: int = 0  # vector-only hits under retrieval_min_vector_score
+    embed_cached: bool = False
     embed_ms: float = 0.0
     vector_ms: float = 0.0
     keyword_ms: float = 0.0

@@ -6,7 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, BackgroundTasks, File, Form, Query, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import PrincipalDep, ServicesDep
+from app.api.deps import PrincipalDep, ServicesDep, rate_limited
 from app.core.errors import InvalidRequestError
 from app.db.models import DocumentStatus
 
@@ -67,6 +67,7 @@ def _parse_metadata(raw: str | None) -> dict[str, Any]:
     status_code=status.HTTP_202_ACCEPTED,
     response_model=UploadResponse,
     summary="Upload a TXT, Markdown, or PDF document for indexing",
+    dependencies=[rate_limited("upload")],
 )
 async def upload_document(
     services: ServicesDep,
@@ -129,6 +130,7 @@ async def delete_document(
     status_code=status.HTTP_202_ACCEPTED,
     response_model=DocumentOut,
     summary="Re-chunk and re-embed with the current chunking/embedding configuration",
+    dependencies=[rate_limited("upload")],
 )
 async def reindex_document(
     document_id: uuid.UUID,

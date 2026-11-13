@@ -5,8 +5,9 @@ ingestion, hybrid retrieval, grounded answers with validated citations, an execu
 enforces budgets and permissions in code, a custom agent loop, and a LangGraph workflow with
 answer verification and human approval, sandboxed workspace tools (files + allowlisted commands,
 writes gated by a human), traces exported to optional Langfuse/LangSmith, and an evaluation
-framework with a 38-case golden dataset and a CI-style regression gate. In progress: cost/latency
-optimization, drift monitoring, and a web UI.
+framework with a 38-case golden dataset and a CI-style regression gate, measured cost/latency
+optimizations behind a quality gate, drift monitoring with persisted alerts, per-tenant rate
+limiting, and a Docker image. In progress: the web UI.
 
 - Product spec: [product.txt](product.txt) · Architecture: [docs/architecture/system-design.png](docs/architecture/system-design.png)
 - Animated end-to-end flows: [docs/architecture/system-flow.gif](docs/architecture/system-flow.gif)
@@ -39,7 +40,13 @@ uv run agentops run "..." --mode loop            # the hand-written agent loop i
 uv run agentops run "Add a function minutes_to_seconds to calc/mathlib.py in my workspace"
 uv run agentops approvals && uv run agentops approve <approval-id>   # the human in the loop
 uv run agentops eval run --judge                 # 38 golden cases, JSON report under reports/
-uv run agentops eval check reports/eval-<id>.json --baseline datasets/baselines/golden-v1-graph-qwen3-8b.json
+uv run agentops eval check reports/eval-<id>.json --baseline datasets/baselines/golden-v1-graph-qwen3-8b-day4.json
+uv run agentops eval retrieval                   # retrieval-only metrics in seconds (no model)
+uv run agentops experiment list                  # configuration profiles (datasets/experiments.json)
+uv run agentops experiment run optimized --kind agent --judge --out reports/bench-optimized.json
+uv run agentops experiment benchmark reports/bench-baseline.json reports/bench-optimized.json
+uv run agentops drift check                      # quality/retrieval/data/operational; exit 1 on measured drift
+uv run agentops metrics --hours 24               # latency, errors, retries, tokens, cost
 
 uv run uvicorn --factory app.main:create_app --port 8000   # API + docs at http://localhost:8000/docs
 ```
@@ -84,6 +91,17 @@ curl -N -H "$H" -H 'content-type: application/json' localhost:8000/api/v1/agent/
 | GET | `/api/v1/workspace/audit` | Every workspace operation by the agent or a user, including rejections |
 | POST | `/api/v1/evaluations/run` | 202 + run id; runs a dataset from `datasets/` in the background (one at a time) |
 | GET | `/api/v1/evaluations/runs` · `/runs/{id}` · `/compare?base=&head=` | Stored runs, per-case results, regression comparison |
+| GET | `/api/v1/metrics?hours=24` | The caller's own operational metrics: success/timeout/failure rates, p50/p95, tokens, retries, cache hits, cost |
+| GET | `/api/v1/monitoring/summary` · `/drift` · `/alerts` | Latest drift check, alert history, platform metrics |
+| POST | `/api/v1/monitoring/check` | Run a drift check now and persist it with its alerts |
+| GET · POST | `/api/v1/experiments` · `/experiments/run` | List profiles; run one (retrieval: 200 + report, agent: 202 + run id) |
+
+Evaluation, experiment, and monitoring routes are operator-only (`AGENTOPS_ADMIN_TENANTS`, dev
+default `tenant_a`); other tenants get 403. Every route that costs model time is rate limited
+per tenant (429 + `Retry-After`).
+
+Errors always look like `{"error": {"code", "message", "request_id"}}`; validation errors add
+`details` with field locations only (submitted values are never echoed).
 
 ## How it works
 
@@ -105,9 +123,11 @@ Key decisions (details in [docs/journal/](docs/journal/)):
   the chunk and its document by tenant. Cross-tenant reads return 404, not 403.
 - **Never silently partial**: chunks and the READY flag commit in one transaction.
 - **RRF over score blending**: cosine similarity and `ts_rank_cd` live on incomparable scales.
-- **No evidence, no model call**: cheaper and cannot hallucinate. Until a relevance threshold
-  exists (Day 4) this only fires for empty tenants or filters matching nothing; otherwise the
-  model itself must report `insufficient_evidence`.
+- **No evidence, no model call**: cheaper and cannot hallucinate. It fires for empty tenants,
+  filters matching nothing, and (only if `AGENTOPS_RETRIEVAL_MIN_VECTOR_SCORE` is set) when every
+  vector hit is below the floor; otherwise the model itself must report `insufficient_evidence`.
+  The floor is off by default because it was measured, not guessed: unanswerable questions reach
+  a top cosine of 0.766 while answerable ones go as low as 0.651, so no single value separates them.
 - **Fallback only for availability**: retries and the optional hosted fallback trigger on
   transient errors only (connect/timeout/5xx/429), never on bad output.
 
@@ -181,6 +201,61 @@ with dataset hash, models, prompt/workflow versions, and retrieval config.
 is breached (pass-rate floor and drop, per-category and per-evaluator drops, zero tolerance for
 `unauthorized_tools` and `workspace_effects`, p95 latency).
 
+### Optimization (Day 4)
+
+Every switch is a setting, off by default, and grouped into profiles in
+[datasets/experiments.json](datasets/experiments.json). A profile is accepted only if
+`agentops experiment benchmark` shows a >5% gain in latency, tokens, or model calls **and** no
+quality breach against the baseline (same thresholds as the eval gate). Results:
+[docs/benchmarks/day4.md](docs/benchmarks/day4.md).
+
+- **Rule routing** (`AGENTOPS_AGENT_RULE_ROUTING`): plain lookups skip the tool-selection model
+  call; questions that ask for a calculation get a calculator nudge instead.
+- **Caches** (in-process LRU + TTL): query embeddings keyed by (tenant, model, query); read-only
+  tool results keyed by tool, tenant, permissions, arguments, the tenant's corpus version (count +
+  last update, read from the DB), and the retriever config, so an upload or config change can never
+  serve stale evidence. Optional semantic answer cache (cosine ≥ 0.97) for verified, read-only
+  graph answers, scoped the same way; off by default.
+- **Evidence cap**, `search_top_k`, **small-model drafts** for simple lookups, and query rewrite
+  on/off are further switches. Turning query rewrite off was measured and rejected: the raw
+  question ("RPO") does not retrieve the "Availability and Recovery" passages; the rewrite does.
+- **Usage accounting** per run and per eval case: model calls by model, failed calls, retries,
+  embedding calls, cache hits, tokens. Local cost is $0; a hosted-equivalent cost appears only when
+  reference prices are configured and is labelled hypothetical.
+
+### Drift monitoring
+
+`agentops drift check` / `POST /api/v1/monitoring/check` compare the current state with committed
+baselines ([datasets/baselines/](datasets/baselines/)) using
+[datasets/drift_thresholds.json](datasets/drift_thresholds.json), and persist the check and one
+alert per breached signal. Each signal is `ok`, `drift`, or `insufficient_data` (too few samples
+is never reported as healthy), with evidence `measured` or `suspected` and a severity.
+
+- **Quality**: pass rate, per category, zero-tolerance evaluators, judge score (suspected only).
+- **Retrieval** (deterministic, no model): hit@k, recall@k, MRR, answer coverage@k (are the
+  answer strings in retrieved passages *from the expected documents*), source-distribution shift
+  (total variation distance); messages name the config fields that changed.
+- **Data**: ingestion failure rate, a tenant corpus mixing embedding models (critical) or chunking
+  configs, corpus size change, golden dataset changed.
+- **Operational** (current vs previous window): p95 latency, timeout/failure/provider-error/retry
+  rates, tokens per execution.
+
+Demo: the `degraded-chunking` profile (250-char fixed chunks, vector only) is flagged with measured
+drift on pass rate and answer coverage; file-level recall and hit rate stay at 1.0 on this corpus,
+which is why answer coverage exists.
+
+### Hardening
+
+- Per-tenant token-bucket rate limits per route class (`agent`, `upload`, `expensive`,
+  `workspace`), configurable via `AGENTOPS_RATE_LIMIT_*`; 429 with `Retry-After`.
+- Operator-only evaluation, experiment, and monitoring APIs; profiles can override only an
+  allowlisted set of settings, and a profile that changes chunking must use its own eval tenant.
+- `Dockerfile`: non-root, `uv sync --frozen --no-dev`, healthcheck, migrations on start.
+  `docker compose --profile app up -d` runs the API against Ollama on the host
+  (`AGENTOPS_OLLAMA_BASE_URL_FROM_DOCKER`, default `http://host.docker.internal:11434`). Ollama
+  must listen beyond loopback for that (`OLLAMA_HOST=0.0.0.0:11434 ollama serve`); otherwise
+  `/ready` reports `ollama: unreachable` while the database check passes.
+
 ## Development
 
 ```bash
@@ -209,22 +284,26 @@ reported as `0` with `pricing_source: "local"`; hosted models without a configur
   `AGENTOPS_DATABASE_URL` (and for tests `AGENTOPS_TEST_ADMIN_DSN` / `AGENTOPS_TEST_DATABASE_URL`) at 5435.
 - Agent runs much slower than the timings above → check memory (`sysctl vm.swapusage`,
   `ollama ps`). On 16 GB, other containers plus qwen3:8b at an 8k context cause heavy swapping.
+- Every model call fails with `provider_error` but `/api/tags` answers → another Ollama (e.g. a
+  container from another project) owns port 11434 without these models. Run a second one,
+  `OLLAMA_HOST=127.0.0.1:11435 ollama serve`, and set `AGENTOPS_OLLAMA_BASE_URL=http://localhost:11435`.
 
 ## Known limitations
 
 - Background indexing uses FastAPI `BackgroundTasks` (in-process): a crash mid-indexing leaves the
   document `processing`. A durable queue is a later hardening step.
-- No relevance threshold: vector search always returns its nearest neighbours, even weak ones.
-  The threshold will be tuned against the evaluation set (Day 4), not guessed.
+- The vector relevance floor is off by default (see above); weak nearest neighbours still reach
+  the model, which must then report `insufficient_evidence` itself.
 - Scanned PDFs (no text layer) are rejected; there is no OCR.
 - Changing the embedding model's dimension needs a migration and a full reindex.
-- No rate limiting yet (Day 4).
+- Rate limits and caches are in-process: with several API replicas each has its own buckets and
+  caches (Redis would be the next step). The workspace WebSocket terminal is not rate limited.
 - Indexing is fail-closed: a document is unsearchable while reindexing, a failed reindex drops its
   previous chunks, and deleting the latest version does not re-promote the previous one.
 - Re-uploading an older version's exact bytes returns that document as a duplicate; it does not
   become latest again (call reindex). The same applies to a FAILED document's bytes.
-- Agent latency on the M4 is 30–90 s per graph run (more under memory pressure): roughly 4–6
-  qwen3:8b calls. Routing and caching are Day 4 work.
+- Agent latency on the M4 is 30–90 s per graph run (more under memory pressure). See
+  [docs/benchmarks/day4.md](docs/benchmarks/day4.md) for what routing and caching changed.
 - The loop's answers are grounded but sometimes incomplete (it answered "5 minutes" without the
   requested seconds conversion in 2 of 4 live runs). The Day 3 evaluation set measures this.
 - A pending approval is resumed through the API or `agentops approve`; there is no expiry or
@@ -232,9 +311,9 @@ reported as `0` with `pricing_source: "local"`; hosted models without a configur
 - Workspace: not an OS sandbox (see above); permissions are all-or-nothing per tenant; receipts
   are never cleaned up; the terminal is one command at a time, not a PTY.
 - After a failed first attempt and a successful retry, qwen3:8b sometimes reports the workspace
-  action as failed (caught by the `ws-edit-approved` eval case); Day 4 work.
+  action as failed (caught by the `ws-edit-approved` eval case); still open.
 - LLM-judge scores come from the same local model family that wrote the answers: advisory only.
-- Live baseline (golden-v1, graph, qwen3:8b): 33/38 (87%). Tool use is the weak spot (2/5): the
-  graph often does unit conversions itself instead of calling the calculator.
+- Live results (golden-v1, graph, qwen3:8b): baseline 33/38 (87%), `optimized` 36/38 (95%; tool
+  use 2/5 → 5/5). Still failing: `multi-retention` and `ws-edit-approved`.
 - Tokens spent on failed model calls and on router-internal retries are not counted against the
   token budget (the harness counts calls when attempted, but tokens only from successful replies).

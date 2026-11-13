@@ -17,6 +17,7 @@ from app.agents.evidence import (
     validate_final,
 )
 from app.agents.harness import call_signature
+from app.agents.policies import is_comparison, is_simple_lookup, needs_calculation, needs_metadata
 from app.agents.result import status_for_error
 from app.agents.state import AgentState, GraphDeps, Intent, PendingCall
 from app.core.errors import AppError, ApprovalRequiredError, BudgetExhaustedError
@@ -24,7 +25,7 @@ from app.llm.schemas import LLMRequest, Message, ModelRole, ToolCall
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "agent-graph-v3"
+PROMPT_VERSION = "agent-graph-v4"
 # Workspace tasks read, then edit, then check: each round is one model call plus its tool calls.
 MAX_TOOL_ROUNDS = 4
 UNTRUSTED = (
@@ -58,6 +59,15 @@ ANSWER_PROMPT = f"""Answer the question using ONLY the evidence and tool results
 - For actions on the user's workspace, the tool results ARE the evidence: say what was done or
   rejected and cite those results. insufficient_evidence is only for unanswerable questions.
 - Quote numbers exactly as written. Be concise. {UNTRUSTED}"""
+
+CALCULATOR_NUDGE = (
+    "This question needs arithmetic. Call the calculator with an expression built from the "
+    "numbers in the evidence; do not compute the result yourself."
+)
+# Replaces the model's text whenever it reports insufficient evidence. Eval run 4ec91948
+# (tool-rto-diff): an "insufficient" draft carried an unverified "45 minutes" claim, and such
+# drafts skip verification. Saying only that the documents do not answer it is always safe.
+INSUFFICIENT_TEXT = "Your documents do not contain enough information to answer this question."
 
 VERIFY_PROMPT = f"""You check whether an answer is supported by its cited sources.
 supported is true only if every factual claim in the answer is stated in, or follows directly
@@ -146,6 +156,20 @@ def _evidence_block(store: EvidenceStore) -> str:
     return "\n".join(parts) or "(no evidence)"
 
 
+def _bounded(store: EvidenceStore, max_chars: int) -> EvidenceStore:
+    """The evidence that fits one prompt: passages in label order until the passage-text budget
+    is spent, plus every tool result. Only what is shown can be cited (the schema enum uses this
+    store's labels). Closes the Day 2 deferral "no total evidence cap in the answer prompt"."""
+    shown, used = EvidenceStore(), 0
+    for label in sorted(store.passages, key=_label_key):
+        size = min(len(str(store.passages[label]["text"])), 1500)  # rendered size per passage
+        if used + size > max_chars and shown.passages:
+            break
+        shown.passages[label], used = store.passages[label], used + size
+    shown.tool_results = dict(store.tool_results)
+    return shown
+
+
 def _label_key(label: str) -> int:
     return int(label[1:])
 
@@ -170,14 +194,21 @@ async def classify_request(state: AgentState, deps: GraphDeps) -> dict[str, Any]
     )
     # Fail toward retrieval: a wrong "calculation" label would answer without evidence.
     intent = result.intent if result else "document_question"
-    needs_tools = bool(result and result.needs_tools) or intent in (
-        "calculation",
-        "metadata_lookup",
-    )
+    question = state["question"]
+    calculation = needs_calculation(question)
+    if deps.tuning.rule_routing:
+        # Code decides. The small model's needs_tools flag was true on nearly every plain lookup
+        # in the Day 3 baseline, which cost one main-model tool-selection call per question.
+        # Comparisons keep the call: there the model adds document_metadata (see policies).
+        needs_tools = calculation or needs_metadata(question) or is_comparison(question)
+    else:
+        needs_tools = bool(result and result.needs_tools)
+    needs_tools = needs_tools or intent in ("calculation", "metadata_lookup")
     return {
         "intent": intent,
         "needs_retrieval": intent not in ("calculation", "workspace_task"),
         "needs_tools": needs_tools or intent == "workspace_task",
+        "needs_calculation": calculation,
     }
 
 
@@ -185,6 +216,8 @@ async def classify_request(state: AgentState, deps: GraphDeps) -> dict[str, Any]
 async def plan_workflow(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
     if not state.get("needs_retrieval"):
         return {"plan": []}
+    if not deps.tuning.query_rewrite:
+        return {"plan": [state["question"]]}  # no model call: search the question as asked
     plan = await _structured(deps, "small", "plan", Plan, PLAN_PROMPT, state["question"])
     # The original question is always searched too: query rewriting may only add recall.
     queries = [state["question"], *(plan.search_queries if plan else [])]
@@ -199,7 +232,7 @@ async def retrieve_evidence(state: AgentState, deps: GraphDeps) -> dict[str, Any
         call = ToolCall(
             id=f"search_{uuid.uuid4().hex[:8]}",
             name="document_search",
-            arguments={"query": query[:500]},
+            arguments={"query": query[:500], "top_k": deps.tuning.search_top_k},
         )
         try:
             outcome = await deps.harness.call_tool(deps.ctx, call)
@@ -240,22 +273,35 @@ async def select_or_execute_tools(state: AgentState, deps: GraphDeps) -> dict[st
             for s in deps.harness.tools.specs(deps.ctx.allowed_tools)
             if s.name != "document_search"
         ]
-        response = await deps.harness.call_model(
-            deps.ctx,
-            "main",
-            LLMRequest(
-                messages=[
-                    Message(role="system", content=TOOLS_PROMPT),
-                    Message(
-                        role="user",
-                        content=f"{_evidence_block(store)}\n\nQuestion: {state['question']}",
-                    ),
-                ],
-                tools=tools,
-                max_output_tokens=deps.max_output_tokens,
+        shown = _bounded(store, deps.tuning.max_evidence_chars)
+        messages = [
+            Message(role="system", content=TOOLS_PROMPT),
+            Message(
+                role="user",
+                content=f"{_evidence_block(shown)}\n\nQuestion: {state['question']}",
             ),
-            name="select_tools",
+        ]
+        request = LLMRequest(
+            messages=messages, tools=tools, max_output_tokens=deps.max_output_tokens
         )
+        response = await deps.harness.call_model(deps.ctx, "main", request, name="select_tools")
+        if (
+            deps.tuning.rule_routing
+            and state.get("needs_calculation")
+            and any(t.name == "calculator" for t in tools)
+            and not any(c.name == "calculator" for c in response.tool_calls)
+            and not any(r.tool == "calculator" for r in store.tool_results.values())
+        ):
+            # Day 3 baseline: 3 of 5 tool-use cases failed because qwen3:8b did the arithmetic
+            # itself. One explicit second ask; if it still declines, the answer proceeds as before.
+            nudged = request.model_copy(
+                update={"messages": [*messages, Message(role="user", content=CALCULATOR_NUDGE)]}
+            )
+            retry = await deps.harness.call_model(
+                deps.ctx, "main", nudged, name="select_tools_calculator"
+            )
+            if retry.tool_calls:
+                response = retry
         calls = [
             PendingCall(call=c.model_dump(), status="queued", reason=None)
             for c in response.tool_calls
@@ -358,7 +404,9 @@ async def human_approval(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
 
 @node("generate_answer")
 async def generate_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
-    store = EvidenceStore.from_state(state.get("evidence"))
+    store = _bounded(
+        EvidenceStore.from_state(state.get("evidence")), deps.tuning.max_evidence_chars
+    )
     if not store.labels:
         # No evidence -> no model call: cheaper, and nothing to hallucinate from.
         draft = FinalAnswer(
@@ -383,9 +431,18 @@ async def generate_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
                 "Return corrected JSON that cites the IDs supporting each claim.",
             ),
         ]
+    # Simple single-fact lookups may be drafted by the small model. verify_answer still runs on
+    # the main model, and every revision after a rejected draft goes back to the main model.
+    small = (
+        deps.tuning.route_simple_to_small
+        and not feedback
+        and state.get("intent") == "document_question"
+        and not store.tool_results
+        and is_simple_lookup(state["question"])
+    )
     response = await deps.harness.call_model(
         deps.ctx,
-        "main",
+        "small" if small else "main",
         LLMRequest(
             messages=messages,
             json_schema=_draft_schema(store),
@@ -406,8 +463,8 @@ async def generate_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
         # report goes through citation validation and entailment verification instead.
         insufficient = False
     draft = FinalAnswer(
-        answer=grounded.answer,
-        citations=grounded.citations,
+        answer=INSUFFICIENT_TEXT if insufficient else grounded.answer,
+        citations=[] if insufficient else grounded.citations,
         insufficient_evidence=insufficient,
     )
     return {**update, "draft": draft.model_dump()}

@@ -5,10 +5,11 @@ no model reasoning. Live objects (the harness, the ExecutionContext) travel in G
 per invocation through LangGraph's runtime context and rebuilt from `budget` on resume.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
 from app.agents.harness import Harness
+from app.agents.tuning import AgentTuning
 from app.core.execution_context import ExecutionContext
 
 Intent = Literal["document_question", "calculation", "metadata_lookup", "workspace_task", "other"]
@@ -28,6 +29,7 @@ class AgentState(TypedDict, total=False):
     intent: Intent
     needs_retrieval: bool
     needs_tools: bool
+    needs_calculation: bool  # policies.needs_calculation (used by rule routing)
     plan: list[str]  # search queries
     evidence: dict[str, Any]  # EvidenceStore.to_state()
     pending_calls: list[PendingCall]
@@ -49,3 +51,4 @@ class GraphDeps:
     harness: Harness
     ctx: ExecutionContext
     max_output_tokens: int = 1024
+    tuning: AgentTuning = field(default_factory=AgentTuning)

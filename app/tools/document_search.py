@@ -4,7 +4,9 @@ Returns raw passages with their chunk IDs. The agent, not the tool, assigns cita
 fences the text as untrusted evidence, so labels stay unique across several searches.
 """
 
+import json
 import uuid
+from collections.abc import Awaitable, Callable, Hashable
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
@@ -44,6 +46,7 @@ class DocumentSearchOutput(BaseModel):
     passages: list[Passage]
     # Retrieval timings (embedding, vector, keyword) for traces; never shown to the model.
     timings_ms: dict[str, float] = Field(default_factory=dict)
+    embed_cached: bool = False
 
 
 class DocumentSearch(Tool[DocumentSearchInput, DocumentSearchOutput]):
@@ -61,13 +64,29 @@ class DocumentSearch(Tool[DocumentSearchInput, DocumentSearchOutput]):
         # What was retrieved, by reference: traces and evaluation need it, passage text stays out.
         return {
             "timings_ms": output.timings_ms,
+            "embed_cached": output.embed_cached,
             "chunk_ids": [str(p.chunk_id) for p in output.passages],
             "document_ids": list(dict.fromkeys(str(p.document_id) for p in output.passages)),
             "filenames": list(dict.fromkeys(p.filename for p in output.passages)),
         }
 
-    def __init__(self, retriever: HybridRetriever, max_passage_chars: int = 2000) -> None:
+    def __init__(
+        self,
+        retriever: HybridRetriever,
+        max_passage_chars: int = 2000,
+        corpus_version: Callable[[str], Awaitable[str]] | None = None,
+    ) -> None:
         self._retriever, self._max_chars = retriever, max_passage_chars
+        self._corpus_version = corpus_version
+
+    async def cache_key(self, args: DocumentSearchInput, ctx: ExecutionContext) -> Hashable | None:
+        if self._corpus_version is None:
+            return None  # cannot tell when the corpus changed: never cache
+        return (
+            await self._corpus_version(ctx.tenant_id),
+            json.dumps(self._retriever.config(), sort_keys=True),
+            self._max_chars,
+        )
 
     async def run(self, args: DocumentSearchInput, ctx: ExecutionContext) -> DocumentSearchOutput:
         result = await self._retriever.search(
@@ -79,6 +98,7 @@ class DocumentSearch(Tool[DocumentSearchInput, DocumentSearchOutput]):
         d = result.diagnostics
         return DocumentSearchOutput(
             query=args.query,
+            embed_cached=d.embed_cached,
             timings_ms={
                 "embed": d.embed_ms,
                 "vector": d.vector_ms,

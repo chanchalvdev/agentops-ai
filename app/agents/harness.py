@@ -9,10 +9,12 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Hashable
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from app.core.cache import TTLCache
 from app.core.errors import (
     AppError,
     ApprovalRequiredError,
@@ -56,8 +58,28 @@ def _argument_problems(exc: ValidationError) -> str:
 
 
 class Harness:
-    def __init__(self, llm: LLMRouter, tools: ToolRegistry) -> None:
+    def __init__(
+        self, llm: LLMRouter, tools: ToolRegistry, tool_cache: TTLCache[BaseModel] | None = None
+    ) -> None:
         self.llm, self.tools = llm, tools
+        self.tool_cache = tool_cache
+
+    async def _cache_key(
+        self, tool: AnyTool, args: BaseModel, ctx: ExecutionContext
+    ) -> Hashable | None:
+        """Tenant + permissions + tool + canonical arguments + what the tool says the result
+        depends on (corpus version, retrieval config). None when the tool must not be cached."""
+        if self.tool_cache is None:
+            return None
+        try:
+            scope = await tool.cache_key(args, ctx)
+        except Exception:
+            logger.warning("cache key failed; not caching", extra={"tool": tool.name})
+            return None
+        if scope is None:
+            return None
+        canonical = json.dumps(args.model_dump(mode="json"), sort_keys=True)
+        return (tool.name, ctx.tenant_id, tuple(sorted(ctx.permissions)), canonical, scope)
 
     # --- policy -----------------------------------------------------------------------------
 
@@ -240,6 +262,29 @@ class Harness:
             raise ApprovalRequiredError(f"{tool.name} requires human approval")
 
         ctx.counters.tool_calls += 1
+        key = await self._cache_key(tool, args, ctx) if tool.idempotent else None
+        cached = self.tool_cache.get(key) if self.tool_cache is not None and key else None
+        if cached is not None:
+            ctx.record(
+                "tool_call",
+                tool.name,
+                "ok",
+                latency_ms=0.0,
+                data={
+                    "call_id": call.id,
+                    "attempts": 0,
+                    "cache": "hit",
+                    "arguments": tool.ledger_arguments(args),
+                    **({"result": summary} if (summary := tool.ledger_output(cached)) else {}),
+                },
+            )
+            return ToolOutcome(
+                call_id=call.id,
+                name=tool.name,
+                output=cached.model_dump(mode="json"),
+                latency_ms=0.0,
+                attempts=0,
+            )
         attempts = 0
 
         async def attempt() -> BaseModel:
@@ -294,6 +339,8 @@ class Harness:
                 logger.warning("tool failed", extra={"tool": tool.name, "detail": exc.detail})
             raise
         latency_ms = round((time.perf_counter() - started) * 1000, 1)
+        if self.tool_cache is not None and key:
+            self.tool_cache.put(key, output)
         ctx.record(
             "tool_call",
             tool.name,
@@ -302,6 +349,7 @@ class Harness:
             data={
                 "call_id": call.id,
                 "attempts": attempts,
+                **({"cache": "miss"} if key else {}),
                 "arguments": tool.ledger_arguments(args),
                 **({"result": summary} if (summary := tool.ledger_output(output)) else {}),
             },

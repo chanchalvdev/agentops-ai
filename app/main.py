@@ -1,6 +1,7 @@
 """FastAPI application factory, middleware, and consistent error responses."""
 
 import logging
+import math
 import re
 import time
 import uuid
@@ -16,13 +17,15 @@ from app.api import (
     agent,
     documents,
     evaluations,
+    experiments,
     health,
     llm,
+    monitoring,
     retrieval,
     workspace,
 )
 from app.core.config import Settings, get_settings
-from app.core.errors import AppError
+from app.core.errors import AppError, TooManyRequestsError
 from app.core.logging import configure_logging, request_id_var
 from app.services import Services, build_services
 
@@ -109,7 +112,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     async def app_error(request: Request, exc: AppError) -> JSONResponse:
         log = logger.error if exc.status_code >= 500 else logger.info
         log("request failed", extra={"error_code": exc.code, "detail": exc.detail})
-        return _error(request, exc.status_code, exc.code, exc.message)
+        response = _error(request, exc.status_code, exc.code, exc.message)
+        if isinstance(exc, TooManyRequestsError):
+            response.headers["Retry-After"] = str(math.ceil(exc.retry_after_s))
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -135,6 +141,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         agent,
         workspace,
         evaluations,
+        experiments,
+        monitoring,
     ):
         app.include_router(module.router)
     return app

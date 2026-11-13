@@ -238,6 +238,21 @@ class IngestionService:
 
     # --- reads and lifecycle (always tenant-scoped) ---------------------------------------------
 
+    async def corpus_version(self, tenant_id: str) -> str:
+        """Changes whenever the tenant's corpus changes (insert, delete, reindex, status change):
+        part of every cache key that depends on document content, so a cached result can never
+        outlive the documents it was computed from. Read from the database, so a change made by
+        another process (the CLI) invalidates this process's cache too."""
+        async with self._sessions() as session:
+            count, latest = (
+                await session.execute(
+                    select(func.count(), func.max(Document.updated_at)).where(
+                        Document.tenant_id == tenant_id
+                    )
+                )
+            ).one()
+        return f"{count}:{latest.isoformat() if latest else '-'}"
+
     async def get(self, tenant_id: str, document_id: uuid.UUID) -> Document:
         async with self._sessions() as session:
             doc: Document | None = await session.scalar(

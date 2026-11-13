@@ -1,6 +1,7 @@
 """document_metadata: facts about one document, scoped to the caller's tenant."""
 
 import uuid
+from collections.abc import Hashable
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -42,6 +43,9 @@ class DocumentMetadata(Tool[DocumentMetadataInput, DocumentMetadataOutput]):
 
     def __init__(self, ingestion: IngestionService) -> None:
         self._ingestion = ingestion
+
+    async def cache_key(self, args: DocumentMetadataInput, ctx: ExecutionContext) -> Hashable:
+        return await self._ingestion.corpus_version(ctx.tenant_id)
 
     async def run(
         self, args: DocumentMetadataInput, ctx: ExecutionContext

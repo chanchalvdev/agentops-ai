@@ -170,7 +170,8 @@ async def test_evaluation_api(
     other_tenant = await client.get(
         f"/api/v1/evaluations/runs/{run_id}", headers={"X-API-Key": "dev-key-tenant-b"}
     )
-    assert other_tenant.status_code == 404
+    # Evaluations are operator-only since Day 4: a non-admin tenant is refused outright.
+    assert other_tenant.status_code == 403
     missing = await client.post("/api/v1/evaluations/run", json={"dataset": "nope"})
     assert missing.status_code == 404
     traversal: Any = await client.post("/api/v1/evaluations/run", json={"dataset": "../etc"})

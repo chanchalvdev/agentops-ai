@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.evaluation.evaluators import EvaluatorResult
+from app.monitoring.cost import HOSTED_EQUIVALENT_LABEL, UsageSummary
 
 
 class CaseReport(BaseModel):
@@ -27,6 +28,7 @@ class CaseReport(BaseModel):
     model_calls: int = 0
     tool_calls: int = 0
     cost_usd: float | None = 0.0
+    usage: UsageSummary | None = None  # retries, embedding calls, cache hits (from the ledger)
     evaluators: list[EvaluatorResult] = Field(default_factory=list)
     judge: dict[str, Any] | None = None
     failures: list[str] = Field(default_factory=list)
@@ -61,6 +63,49 @@ def _percentile(values: list[float], q: float) -> float | None:
     ordered = sorted(values)
     index = min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))
     return round(ordered[index], 1)
+
+
+def _per(total: float | None, n: int, digits: int = 6) -> float | None:
+    return None if total is None or n == 0 else round(total / n, digits)
+
+
+def cost_metrics(ran: list[CaseReport], passed: int) -> dict[str, Any]:
+    """Cost and efficiency per request and per successful task (product.txt 12)."""
+    costs = [c.cost_usd for c in ran]
+    # None if any case had unknown pricing: never report a partial sum as the total
+    cost = None if any(c is None for c in costs) else round(sum(c or 0 for c in costs), 6)
+    tokens = sum(c.input_tokens + c.output_tokens for c in ran)
+    usages = [c.usage for c in ran if c.usage is not None]
+    hosted = [u.hosted_equivalent_usd for u in usages]
+    hosted_total = (
+        round(sum(h or 0 for h in hosted), 6)
+        if usages and len(usages) == len(ran) and all(h is not None for h in hosted)
+        else None
+    )
+    model_calls = sum(c.model_calls for c in ran)
+    retries = sum(u.retries for u in usages)
+    return {
+        "cost_usd": cost,
+        "cost_per_request_usd": _per(cost, len(ran)),
+        "cost_per_successful_task_usd": _per(cost, passed),
+        "tokens_per_request": _per(tokens, len(ran), 1),
+        "tokens_per_successful_task": _per(tokens, passed, 1),
+        "hosted_equivalent": {
+            "label": HOSTED_EQUIVALENT_LABEL,
+            "total_usd": hosted_total,
+            "per_request_usd": _per(hosted_total, len(ran)),
+            "per_successful_task_usd": _per(hosted_total, passed),
+        },
+        "retries": retries,
+        "retry_rate": _per(retries, model_calls, 4),
+        "failed_model_calls": sum(u.failed_model_calls for u in usages),
+        "embedding_calls_mean": _per(sum(u.embedding_calls for u in usages), len(usages), 2),
+        "cache_hits": {
+            "tool": sum(u.tool_cache_hits for u in usages),
+            "embedding": sum(u.embedding_cache_hits for u in usages),
+            "semantic": sum(1 for u in usages if u.semantic_cache_hit),
+        },
+    }
 
 
 def aggregate(cases: list[CaseReport]) -> dict[str, Any]:
@@ -114,10 +159,9 @@ def aggregate(cases: list[CaseReport]) -> dict[str, Any]:
         },
         "model_calls_mean": round(statistics.mean(c.model_calls for c in ran), 2) if ran else None,
         "tool_calls_mean": round(statistics.mean(c.tool_calls for c in ran), 2) if ran else None,
-        # None if any case had unknown pricing: never report a partial sum as the total
-        "cost_usd": None
-        if any(c.cost_usd is None for c in ran)
-        else round(sum(c.cost_usd or 0 for c in ran), 6),
+        **cost_metrics(ran, passed),
+        # Mean of the four advisory judge criteria; None without --judge (never pass rate).
+        "quality_score": round(statistics.mean(judge.values()), 3) if judge else None,
         "judge": judge,
         "judged_cases": len(judged),
     }

@@ -1,0 +1,68 @@
+{
+  "version": "experiments-v1",
+  "profiles": [
+    {
+      "name": "baseline",
+      "description": "Day 3 behaviour: every optimization switch off.",
+      "overrides": {}
+    },
+    {
+      "name": "optimized",
+      "description": "Rule routing (no tool-selection call on plain lookups; calculator nudge), query-embedding and tool-result caches. Query rewrite stays on: turning it off was measured and rejected (see optimized-no-rewrite).",
+      "overrides": {
+        "agent_rule_routing": true,
+        "cache_query_embeddings": true,
+        "cache_tool_results": true
+      }
+    },
+    {
+      "name": "optimized-small",
+      "description": "optimized + first answer draft of simple lookups on qwen3:1.7b (verification and revisions stay on qwen3:8b).",
+      "overrides": {
+        "agent_rule_routing": true,
+        "cache_query_embeddings": true,
+        "cache_tool_results": true,
+        "agent_route_simple_to_small": true
+      }
+    },
+    {
+      "name": "optimized-no-rewrite",
+      "description": "Rejected variant: optimized without the small-model query-rewrite call. multi_document 4/5 -> 2/5 and tokens -32% vs baseline: the raw question ('RPO') does not retrieve the 'Availability and Recovery' chunks; the rewrite expands it. (Measured with the earlier routing that also skipped comparisons, so its multi-availability failure is partly that bug.)",
+      "purpose": "rejected",
+      "overrides": {
+        "agent_rule_routing": true,
+        "cache_query_embeddings": true,
+        "cache_tool_results": true,
+        "agent_query_rewrite": false
+      }
+    },
+    {
+      "name": "vector-only",
+      "description": "Retrieval probe: vector search only (no keyword side, no RRF).",
+      "purpose": "probe",
+      "overrides": {
+        "retrieval_mode": "vector"
+      }
+    },
+    {
+      "name": "keyword-only",
+      "description": "Retrieval probe: Postgres full-text search only.",
+      "purpose": "probe",
+      "overrides": {
+        "retrieval_mode": "keyword"
+      }
+    },
+    {
+      "name": "degraded-chunking",
+      "description": "Regression demo: fixed 250-char chunks with no overlap, vector-only retrieval.",
+      "purpose": "regression-demo",
+      "overrides": {
+        "chunk_strategy": "fixed",
+        "chunk_size_chars": 250,
+        "chunk_overlap_chars": 0,
+        "retrieval_mode": "vector",
+        "eval_tenant": "eval_degraded_chunks"
+      }
+    }
+  ]
+}
