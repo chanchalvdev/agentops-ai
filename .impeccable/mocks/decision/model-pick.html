@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Flight Strips</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Martian+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;background:#23282E;color:#ECEFF1;font-family:"Barlow Semi Condensed",sans-serif;display:grid;grid-template-rows:56px 1fr}
+.mono{font-family:"Martian Mono",monospace;font-variant-numeric:tabular-nums}
+top{display:flex;align-items:center;gap:28px;padding:0 28px;background:#1A1E23;border-bottom:1px solid #3A424B}
+top b{font-size:20px;font-weight:700;letter-spacing:.02em}
+top a{color:#AEB8C2;font-size:16px;font-weight:600;text-decoration:none}
+top a.on{color:#fff;border-bottom:2px solid #A9C9E8;padding-bottom:4px}
+top .r{margin-left:auto;font-size:12px;color:#AEB8C2}
+.bays{display:grid;grid-template-columns:repeat(3,1fr) 1.25fr;gap:18px;padding:22px 28px;min-height:0}
+.bay h2{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:#AEB8C2;margin-bottom:10px;display:flex;justify-content:space-between}
+.strip{display:grid;grid-template-columns:86px 1fr 70px;color:#111418;margin-bottom:8px;border-left:6px solid #111418;min-height:66px}
+.strip>div{padding:7px 9px;border-right:1px solid rgba(0,0,0,.25)}
+.strip .id{font-size:12px;font-weight:600}
+.strip .q{font-size:15px;font-weight:600;line-height:1.2}
+.strip .t{font-size:11px;text-align:right}
+.buff{background:#E6DCB4}.blue{background:#A9C9E8}.pink{background:#E7B3B8}
+.strip.sel{outline:3px solid #fff;outline-offset:2px}
+.detail{background:#E6DCB4;color:#111418;padding:18px 20px;height:100%}
+.detail h3{font-size:22px;line-height:1.2;margin:6px 0 14px}
+.row{display:grid;grid-template-columns:110px 1fr 80px;font-size:13px;padding:6px 0;border-top:1px solid rgba(0,0,0,.2)}
+.ans{margin-top:16px;font-size:17px;line-height:1.45;font-family:Georgia,serif}
+.clr{margin-top:16px;display:flex;gap:10px}
+.clr span{border:2px solid #111418;padding:6px 14px;font-weight:700;font-size:14px}
+</style></head><body>
+<top><b>AgentOps AI</b><a class="on">Bay</a><a>Documents</a><a>Workspace</a><a>Clearances ·1</a><a>Evals</a><span class="r mono">qwen3:8b · tenant_a · ready</span></top>
+<div class="bays">
+<div class="bay"><h2>Inbound <span class="mono">2</span></h2>
+<div class="strip blue sel"><div class="id mono">EX-7A41<br>graph</div><div class="q">RPO in latest payments architecture, in seconds?</div><div class="t mono">verify<br>36 s</div></div>
+<div class="strip blue"><div class="id mono">EX-7A3F<br>loop</div><div class="q">Compare availability targets v1 vs v2</div><div class="t mono">retrieve<br>4 s</div></div></div>
+<div class="bay"><h2>Awaiting clearance <span class="mono">1</span></h2>
+<div class="strip pink"><div class="id mono">EX-9A49<br>graph</div><div class="q">Create notes/ui-demo.md in my workspace</div><div class="t mono">write<br>held</div></div></div>
+<div class="bay"><h2>Landed <span class="mono">143</span></h2>
+<div class="strip buff"><div class="id mono">EX-724B</div><div class="q">RPO in v2, in seconds</div><div class="t mono">38.2 s</div></div>
+<div class="strip buff"><div class="id mono">EX-6F10</div><div class="q">Who is paged on failover?</div><div class="t mono">29.5 s</div></div>
+<div class="strip buff"><div class="id mono">EX-6E02</div><div class="q">Retention period in v2</div><div class="t mono">31.0 s</div></div></div>
+<div class="detail"><span class="mono" style="font-size:12px">EX-7A41 · graph · 14 Nov 09:42</span>
+<h3>What is the RPO in the latest payments architecture, in seconds?</h3>
+<div class="row mono"><span>classify</span><span>qwen3:1.7b</span><span>2.0 s</span></div>
+<div class="row mono"><span>plan</span><span>3 queries</span><span>0.7 s</span></div>
+<div class="row mono"><span>retrieve</span><span>5 chunks</span><span>0.4 s</span></div>
+<div class="row mono"><span>calculator</span><span>5*60 = 300</span><span>0.0 s</span></div>
+<div class="row mono"><span>answer</span><span>qwen3:8b</span><span>12.7 s</span></div>
+<div class="ans">The RPO in architecture v2 is 5 minutes [S1], i.e. 300 seconds [T1].</div>
+<div class="clr"><span>SUPPORTED</span><span class="mono">4,544 tok</span></div></div>
+</div>
+</body></html>

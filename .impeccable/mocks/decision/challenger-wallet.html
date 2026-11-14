@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Ticket Wallet</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;background:#FBFBF8;color:#1D2B5A;font-family:"Archivo",sans-serif}
+.carbon{font-family:"Courier Prime",monospace;color:#5A3E8C}
+header{background:#1D2B5A;color:#fff;display:flex;align-items:center;gap:30px;padding:0 32px;height:62px}
+header b{font-weight:800;font-size:20px;letter-spacing:.04em}
+header a{font-weight:700;font-size:13px;letter-spacing:.1em;opacity:.75}
+header a.on{opacity:1;border-bottom:3px solid #C8102E;padding-bottom:4px}
+main{padding:28px 32px}
+.q{font-size:26px;font-weight:700;margin:6px 0 22px}
+.book{display:flex;gap:0}
+.coupon{flex:1;border:1.5px solid #1D2B5A;border-right:1.5px dashed #1D2B5A;padding:0;min-height:170px;position:relative;background:#fff}
+.coupon .tab{background:#1D2B5A;color:#fff;font-size:11px;font-weight:800;letter-spacing:.12em;padding:6px 10px}
+.coupon .f{padding:10px;font-size:12px;line-height:1.5}
+.coupon .f b{display:block;font-size:22px;color:#5A3E8C;font-family:"Courier Prime",monospace}
+.void{position:absolute;top:70px;left:20px;transform:rotate(-14deg);border:3px solid #C8102E;color:#C8102E;font-weight:800;font-size:26px;padding:2px 12px;letter-spacing:.1em}
+.final{display:grid;grid-template-columns:1fr 380px;gap:28px;margin-top:26px}
+.final p{font-size:21px;line-height:1.5}
+.ref{border:1.5px solid #1D2B5A;padding:12px;margin-bottom:10px;font-size:13px}
+.ref b{color:#C8102E;font-size:12px;letter-spacing:.1em}
+</style></head><body>
+<header><b>AGENTOPS AI</b><a class="on">ASK</a><a>DOCUMENTS</a><a>WORKSPACE</a><a>APPROVALS 1</a><a>EXECUTIONS</a><a>EVALS</a></header>
+<main>
+<span class="carbon">EX-7A41 · GRAPH · 14 NOV 09:42 · TENANT_A</span>
+<div class="q">What is the RPO in the latest payments architecture, in seconds?</div>
+<div class="book">
+<div class="coupon"><div class="tab">01 CLASSIFY</div><div class="f"><b>2.0 s</b>qwen3:1.7b<br>144 tokens</div></div>
+<div class="coupon"><div class="tab">02 PLAN</div><div class="f"><b>0.7 s</b>3 search queries</div></div>
+<div class="coupon"><div class="tab">03 RETRIEVE</div><div class="f"><b>5</b>chunks · 0.4 s</div></div>
+<div class="coupon"><div class="tab">04 CALCULATOR</div><div class="f"><b>300</b>5 * 60</div></div>
+<div class="coupon"><div class="tab">05 ANSWER</div><div class="f"><b>12.7 s</b>qwen3:8b · 1,580 tok</div></div>
+<div class="coupon" style="border-right:1.5px solid #1D2B5A"><div class="tab">06 VERIFY</div><div class="f"><b>OK</b>supported</div></div>
+</div>
+<div class="final"><p>The recovery point objective in architecture v2 is <b>5 minutes</b> [S1], which is <b>300 seconds</b> [T1].</p>
+<div><div class="ref"><b>S1</b> payments-architecture-v2.md — RPO: 5 minutes, continuous WAL streaming.</div>
+<div class="ref" style="position:relative;height:84px"><b>AP-617E</b> workspace_write notes/old.md<div class="void" style="top:22px;left:150px;font-size:20px">VOID</div></div></div></div>
+</main></body></html>

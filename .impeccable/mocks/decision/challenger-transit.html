@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Midnight Transit</title>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700;800&family=Red+Hat+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;background:#0F1B33;color:#F4F1EA;font-family:"Hanken Grotesk",sans-serif;display:grid;grid-template-columns:220px 1fr}
+.mono{font-family:"Red Hat Mono",monospace}
+nav{padding:26px 18px;border-right:1px solid #22355C}
+nav b{font-size:19px;font-weight:800;display:block;margin-bottom:26px}
+nav div{padding:9px 10px;font-weight:600;color:#B8C2D6;display:flex;gap:10px;align-items:center}
+nav div i{width:10px;height:10px;border-radius:50%;border:3px solid currentColor}
+nav .on{color:#fff}nav .on i{border-color:#E2382A}
+main{padding:28px 40px}
+h1{font-size:28px;font-weight:700;max-width:900px}
+.map{position:relative;height:250px;margin:26px 0 22px;border-bottom:1px solid #22355C}
+.line{position:absolute;height:8px;border-radius:4px}
+.st{position:absolute;width:24px;height:24px;border-radius:50%;background:#F4F1EA;border:5px solid #0F1B33;box-shadow:0 0 0 3px #F4F1EA;transform:translate(-50%,-50%)}
+.st.done{background:#E2382A}.st.live{background:#F2A900}
+.lbl{position:absolute;font-size:13px;font-weight:700;transform:translateX(-50%);white-space:nowrap;text-align:center}
+.lbl small{display:block;font-weight:400;color:#B8C2D6;font-family:"Red Hat Mono",monospace}
+.ans{display:grid;grid-template-columns:1fr 380px;gap:36px}
+.ans p{font-size:21px;line-height:1.5}
+.tag{background:#E2382A;color:#fff;font-size:12px;font-weight:700;padding:1px 6px;border-radius:3px;font-family:"Red Hat Mono",monospace}
+.card{background:#16264A;border-left:4px solid #2F6BDE;padding:12px 14px;margin-bottom:10px;font-size:13px;line-height:1.45}
+.card b{display:block;font-size:12px;margin-bottom:4px;color:#B8C2D6}
+</style></head><body>
+<nav><b>AgentOps AI</b><div class="on"><i></i>Ask</div><div><i></i>Documents</div><div><i></i>Workspace</div><div><i></i>Approvals · 1</div><div><i></i>Executions</div><div><i></i>Evals &amp; drift</div></nav>
+<main>
+<span class="mono" style="color:#B8C2D6;font-size:13px">EX-7A41 · graph line · 14 Nov 09:42</span>
+<h1>What is the RPO in the latest payments architecture, in seconds?</h1>
+<div class="map">
+<div class="line" style="left:30px;right:30px;top:80px;background:#E2382A"></div>
+<div class="line" style="left:30px;width:520px;top:180px;background:#2F6BDE;opacity:.55"></div>
+<div class="st done" style="left:60px;top:84px"></div><div class="lbl" style="left:60px;top:110px">classify<small>2.0 s</small></div>
+<div class="st done" style="left:260px;top:84px"></div><div class="lbl" style="left:260px;top:110px">plan<small>0.7 s</small></div>
+<div class="st done" style="left:460px;top:84px"></div><div class="lbl" style="left:460px;top:110px">retrieve<small>5 chunks</small></div>
+<div class="st done" style="left:660px;top:84px"></div><div class="lbl" style="left:660px;top:110px">calculator<small>300</small></div>
+<div class="st done" style="left:860px;top:84px"></div><div class="lbl" style="left:860px;top:110px">answer<small>12.7 s</small></div>
+<div class="st live" style="left:1060px;top:84px"></div><div class="lbl" style="left:1060px;top:110px">verify<small>live</small></div>
+<div class="lbl" style="left:120px;top:200px;color:#B8C2D6">loop line · model ⇄ tools</div>
+</div>
+<div class="ans"><p>The recovery point objective in architecture v2 is <b>5 minutes</b> <span class="tag">S1</span>, which is <b>300 seconds</b> <span class="tag">T1</span>.</p>
+<div><div class="card"><b>S1 · payments-architecture-v2.md</b>RPO: 5 minutes, using continuous WAL streaming to a standby region.</div><div class="card" style="border-color:#F2A900"><b>T1 · calculator</b><span class="mono">5 * 60 = 300</span></div></div></div>
+</main></body></html>

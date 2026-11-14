@@ -1,0 +1,108 @@
+{
+  "title": "Choose the visual world for AgentOps AI",
+  "question": "The roll assigned Custody Record. Keep it, take an alternate, or re-roll.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Custody Record",
+      "kicker": "THE ROLL",
+      "lineage": "forensic chain-of-custody tags and evidence logs",
+      "thesis": "Every answer is evidence: case-numbered, its custody chain signed at every handoff.",
+      "palette": ["#F2F3EF", "#172033", "#D9B46A", "#5B3FA0", "#B4232F", "#2F7D4F"],
+      "materials": ["manila tag stock", "rubber-stamp violet ink", "typed case numbers"],
+      "viewport": "Manila nav rail; the run as case EX-7A41 with its custody chain streaming across the top, the answer and numbered exhibits beside it.",
+      "risk": "Becomes costume if tag holes, string or tape textures leak into controls; the world must stay in type, colour and the chain.",
+      "raised": [
+        {"from": "challenger-metro", "raise": "The type ramp carries hierarchy; boxes are removed wherever a rule and a weight change suffice."},
+        {"from": "challenger-wall", "raise": "The focused exhibit stays at full ink while the rest of the chain drops back."},
+        {"from": "challenger-saville", "raise": "Every artifact carries a sequential number (case EX-, exhibit S1, approval AP-), and the numbers are how you navigate."},
+        {"from": "challenger-ikeda", "raise": "All figures are tabular monospace at full density: latency, tokens and scores are never rounded into prose."}
+      ],
+      "html": ".impeccable/mocks/decision/assigned.html"
+    },
+    {
+      "id": "model-pick",
+      "label": "Flight Strips",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "air-traffic flight progress strips in strip bays",
+      "thesis": "Each run is a strip in a bay; a human clearance moves it on.",
+      "palette": ["#23282E", "#E6DCB4", "#A9C9E8", "#E7B3B8", "#111418"],
+      "materials": ["printed strip stock", "grease-pencil marks", "strip holders"],
+      "viewport": "Dark bay ground; runs as colour-coded strips grouped by state, the selected strip expanded into its trace.",
+      "risk": "The most familiar mapping for an ops tool; strips drift toward a kanban board and buff stock toward the cream default.",
+      "html": ".impeccable/mocks/decision/model-pick.html"
+    },
+    {
+      "id": "challenger-transit",
+      "label": "Midnight Transit Diagram",
+      "verdict": "competitive",
+      "lineage": "metropolitan rail diagrams fired as enamel",
+      "thesis": "The workflow as a line map: classify, plan, retrieve and verify are stations every run travels.",
+      "palette": ["#0F1B33", "#F4F1EA", "#E2382A", "#2F6BDE", "#F2A900", "#2E9E5B"],
+      "materials": ["midnight enamel", "porcelain station ticks", "line inks"],
+      "viewport": "The graph and loop as two lines across the top, the live run lit station by station, answer below.",
+      "case": "Holds product clarity (the pipeline is literally a line), loses on audience fit: the dark mural fights screen-share and dense tables.",
+      "risk": "A map that becomes the page instead of a signature move.",
+      "html": ".impeccable/mocks/decision/challenger-transit.html",
+      "hero": "https://impeccable.style/worlds/cards/wayfinding-cartography-signage-midnight-transit-diagram-hero.webp"
+    },
+    {
+      "id": "challenger-wallet",
+      "label": "Jet-age Ticket Wallet",
+      "verdict": "competitive",
+      "lineage": "carbon-copy airline coupon books",
+      "thesis": "A run is a coupon book: each step tears off in sequence, and nothing disappears, it is voided.",
+      "palette": ["#FBFBF8", "#1D2B5A", "#C8102E", "#5A3E8C"],
+      "materials": ["coupon stock", "carbon numerals", "VOID stamps"],
+      "viewport": "Navy header; the run's steps as tabbed coupons, rejected approvals stamped VOID, the answer on the final coupon.",
+      "case": "Holds audience fit (audit trails never delete), narrower on clarity: coupons stretch thin over tables and charts.",
+      "risk": "Navy, red and white reads airline-branded rather than product.",
+      "html": ".impeccable/mocks/decision/challenger-wallet.html",
+      "hero": "https://impeccable.style/worlds/cards/vernacular-ephemera-jet-age-ticket-wallet-hero.webp"
+    },
+    {
+      "id": "challenger-metro", "label": "Metro Typographic Tiles", "verdict": "declined",
+      "lineage": "metro design language", "thesis": "Giant cropped lowercase type is the interface.",
+      "palette": ["#000000", "#1BA1E2", "#FFFFFF"], "materials": ["flat tiles"], "viewport": "Panorama of tiles.",
+      "case": "Loses both axes: dense traces and tables do not survive poster-scale type.",
+      "kept": "Type ramp carries hierarchy instead of boxes.", "risk": "Unscannable at data density.",
+      "hero": "https://impeccable.style/worlds/cards/digital-design-canon-metro-typographic-tiles-hero.webp"
+    },
+    {
+      "id": "challenger-wall", "label": "Streaming Title Wall", "verdict": "declined",
+      "lineage": "streaming catalog rows", "thesis": "Rows of tiles; the focused one grows.",
+      "palette": ["#141414", "#E50914", "#FFFFFF"], "materials": ["poster art"], "viewport": "Rows of run tiles.",
+      "case": "Loses both: runs have no artwork, and browsing is not the job.",
+      "kept": "Focus keeps full ink while the rest dims.", "risk": "Entertainment register.",
+      "hero": "https://impeccable.style/worlds/cards/pop-culture-shelf-streaming-title-card-wall-hero.webp"
+    },
+    {
+      "id": "challenger-saville", "label": "Catalog Sleeve", "verdict": "declined",
+      "lineage": "factory records catalog identity", "thesis": "Every artifact gets a catalog number.",
+      "palette": ["#0B0B0B", "#FFFFFF", "#E8402B"], "materials": ["matte black", "hairline plot"], "viewport": "Index by number.",
+      "case": "Loses both: coded colour strips hide statuses operators must read instantly.",
+      "kept": "Sequential numbering as navigation.", "risk": "Obscure by design.",
+      "hero": "https://impeccable.style/worlds/cards/brand-identity-canon-saville-catalog-sleeve-hero.webp"
+    },
+    {
+      "id": "challenger-ikeda", "label": "Datamatics Field", "verdict": "declined",
+      "lineage": "data-sublime installations", "thesis": "Pure black and white data at full density.",
+      "palette": ["#000000", "#FFFFFF"], "materials": ["barcode bars", "monospace numerics"], "viewport": "Barcode field.",
+      "case": "Loses both: no colour left for state, and strobing is hostile to a working tool.",
+      "kept": "Tabular monospace figures at full density.", "risk": "Spectacle over task.",
+      "hero": "https://impeccable.style/worlds/cards/ikeda-datamatics-hero.webp"
+    }
+  ],
+  "reroll": {"registers": ["safer", "bolder"]},
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "A clean developer-tool console, executed impeccably.",
+    "palette": ["#FFFFFF", "#0F172A", "#4F46E5", "#E2E8F0"],
+    "materials": ["neutral panels", "hairline borders"],
+    "viewport": "Sidebar, chat thread, trace panel: the arrangement every agent console ships.",
+    "risk": "Indistinguishable from the competition by design.",
+    "html": ".impeccable/mocks/decision/canon.html"
+  },
+  "steer": true
+}

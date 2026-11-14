@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Custody Record</title>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;font-family:"Public Sans",sans-serif;background:#F2F3EF;color:#172033;display:grid;grid-template-columns:232px 1fr}
+.mono{font-family:"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+nav{background:#D9B46A;display:flex;flex-direction:column;padding:22px 0}
+.brand{padding:0 22px 22px;border-bottom:1.5px solid #172033}
+.brand b{display:block;font-weight:800;font-size:19px;letter-spacing:-.01em}
+.brand span{font-size:12px;font-weight:600;opacity:.75}
+nav ul{list-style:none;padding:14px 10px;flex:1}
+nav li{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;font-weight:600;font-size:14.5px;border-radius:3px}
+nav li.on{background:#172033;color:#F2F3EF}
+nav li .n{font-size:11px;opacity:.7}
+nav li .badge{background:#5B3FA0;color:#fff;font-size:11px;padding:1px 7px;border-radius:9px}
+.key{margin:0 14px;padding:12px;border:1.5px solid #172033;font-size:12px}
+.key .mono{font-size:12px}
+main{display:grid;grid-template-rows:auto auto 1fr;min-width:0}
+header{display:flex;align-items:baseline;gap:18px;padding:26px 36px 18px;border-bottom:1.5px solid #172033}
+header .case{font-size:13px;font-weight:700;background:#172033;color:#F2F3EF;padding:4px 9px}
+header h1{font-size:26px;font-weight:700;letter-spacing:-.015em}
+header .meta{margin-left:auto;font-size:13px;color:#4A5468}
+.chain{display:flex;padding:18px 36px;gap:0;border-bottom:1px solid #C9CCC4;background:#ECEDE8}
+.hand{flex:1;padding:0 14px;border-left:1.5px solid #172033;position:relative}
+.hand:first-child{border-left:0;padding-left:0}
+.hand .step{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#4A5468}
+.hand .who{font-size:14px;font-weight:700;margin:3px 0 2px}
+.hand .t{font-size:12px;color:#4A5468}
+.hand.dim{opacity:.42}
+.hand.live .who::after{content:" ●";color:#5B3FA0}
+.seal{flex:0 0 150px;border:2px solid #5B3FA0;color:#5B3FA0;padding:6px 10px;transform:rotate(-2deg);font-weight:800;font-size:13px;letter-spacing:.08em;text-align:center;align-self:center}
+.seal small{display:block;font-weight:600;letter-spacing:0;font-size:11px}
+.work{display:grid;grid-template-columns:1fr 420px;min-height:0}
+.answer{padding:30px 36px;border-right:1px solid #C9CCC4}
+.label{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#4A5468;margin-bottom:10px}
+.answer p{font-size:21px;line-height:1.5;max-width:720px}
+.ex{font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:700;background:#172033;color:#F2F3EF;padding:1px 6px;margin:0 2px}
+.facts{display:flex;gap:28px;margin-top:26px;padding-top:18px;border-top:1px solid #C9CCC4}
+.facts div{font-size:12px;color:#4A5468}.facts b{display:block;font-size:20px;color:#172033;font-family:"JetBrains Mono",monospace}
+.ask{margin-top:34px;display:flex;gap:10px}
+.ask input{flex:1;font:inherit;font-size:15px;padding:12px 14px;border:1.5px solid #172033;background:#fff}
+.ask button{font:inherit;font-weight:700;background:#172033;color:#fff;border:0;padding:0 22px}
+aside{padding:30px 28px;overflow:hidden}
+.exhibit{border:1.5px solid #172033;background:#fff;margin-bottom:14px}
+.exhibit .h{display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #C9CCC4;font-size:12px;font-weight:700}
+.exhibit .b{padding:10px 12px;font-size:13px;line-height:1.45;color:#2C3547}
+.exhibit.focus{box-shadow:4px 4px 0 #5B3FA0}
+.exhibit.back{opacity:.5}
+</style></head><body>
+<nav>
+<div class="brand"><b>AgentOps AI</b><span>Custody record · tenant_a</span></div>
+<ul>
+<li class="on">Ask <span class="n mono">EX-7A41</span></li>
+<li>Documents <span class="n mono">5</span></li>
+<li>Workspace</li>
+<li>Approvals <span class="badge mono">1</span></li>
+<li>Executions <span class="n mono">143</span></li>
+<li>Evals &amp; drift</li>
+</ul>
+<div class="key">API <b>ready</b> · Ollama <b>ok</b><br><span class="mono">qwen3:8b · 1.7b</span></div>
+</nav>
+<main>
+<header><span class="case mono">EX-7A41</span><h1>What is the RPO in the latest payments architecture, in seconds?</h1><span class="meta mono">graph · 14 Nov 09:42</span></header>
+<div class="chain">
+<div class="hand"><div class="step">01 classify</div><div class="who mono">qwen3:1.7b</div><div class="t mono">2.0 s · 144 tok</div></div>
+<div class="hand"><div class="step">02 plan</div><div class="who mono">qwen3:1.7b</div><div class="t mono">0.7 s · 3 queries</div></div>
+<div class="hand"><div class="step">03 retrieve</div><div class="who mono">document_search ×3</div><div class="t mono">0.4 s · 5 chunks</div></div>
+<div class="hand"><div class="step">04 tools</div><div class="who mono">calculator</div><div class="t mono">5 × 60 = 300</div></div>
+<div class="hand"><div class="step">05 answer</div><div class="who mono">qwen3:8b</div><div class="t mono">12.7 s · 1,580 tok</div></div>
+<div class="hand live"><div class="step">06 verify</div><div class="who mono">qwen3:8b</div><div class="t mono">3.2 s</div></div>
+<div class="seal">SUPPORTED<small class="mono">sealed 38.2 s</small></div>
+</div>
+<div class="work">
+<section class="answer">
+<div class="label">Answer · answered</div>
+<p>The recovery point objective in architecture v2 is <b>5 minutes</b> <span class="ex">S1</span>, which is <b>300 seconds</b> <span class="ex">T1</span>, achieved with continuous WAL streaming to a standby region.</p>
+<div class="facts"><div><b>5</b>model calls</div><div><b>4</b>tool calls</div><div><b>4,544</b>tokens</div><div><b>$0.00</b>local cost</div></div>
+<div class="ask"><input value="Ask about your documents, or ask the agent to change a workspace file…"><button>Ask</button></div>
+</section>
+<aside>
+<div class="label">Exhibits</div>
+<div class="exhibit focus"><div class="h"><span class="mono">S1</span><span>payments-architecture-v2.md · v1</span></div><div class="b">§ Availability and Recovery — Recovery Point Objective (RPO): 5 minutes, using continuous WAL streaming to a standby region.</div></div>
+<div class="exhibit back"><div class="h"><span class="mono">T1</span><span>calculator</span></div><div class="b mono">5 * 60 = 300</div></div>
+<div class="exhibit back"><div class="h"><span class="mono">S2</span><span>runbook-database-failover.md</span></div><div class="b">§ Procedure — the on-call engineer confirms replica lag before promotion.</div></div>
+</aside>
+</div>
+</main>
+</body></html>
