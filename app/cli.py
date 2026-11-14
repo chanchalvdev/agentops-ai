@@ -163,7 +163,7 @@ def run_agent(
         r = await services.agents.run(ctx, mode, question)  # type: ignore[arg-type]
         _print_result(r, trace)
         if r.status == "awaiting_approval":
-            for a in await services.approvals.list(tenant, "pending", 5):
+            for a in await services.approvals.find(tenant, "pending", 5):
                 if a.execution_id == r.execution_id:
                     typer.secho(
                         f"  approval {a.id}: {a.tool_name} {_args(a.arguments)}", fg="yellow"
@@ -201,7 +201,7 @@ def approvals(tenant: Tenant = "tenant_a", status: str = "pending") -> None:
     """List tool calls waiting for (or given) a human decision."""
 
     async def run(services: Services) -> None:
-        rows = await services.approvals.list(tenant, None if status == "all" else status)
+        rows = await services.approvals.find(tenant, None if status == "all" else status)
         for a in rows:
             typer.echo(f"{a.id}  {a.status:<9} {a.tool_name:<16} {_args(a.arguments)}")
         if not rows:

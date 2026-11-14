@@ -1,7 +1,7 @@
 """Persistence for evaluation datasets, runs, and per-case results."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
@@ -108,6 +108,27 @@ class EvaluationStore:
                     finished_at=datetime.now(UTC),
                 )
             )
+
+    async def expire_stale(self, max_age_s: float) -> int:
+        """Mark runs still "running" after `max_age_s` as failed. Their process ended without
+        reaching finish_run (a graceful cancel does reach it); left alone they would look like
+        work in progress forever. Returns how many were marked."""
+        now = datetime.now(UTC)
+        async with self._sessions() as session, session.begin():
+            result = await session.execute(
+                update(EvaluationRun)
+                .where(
+                    EvaluationRun.status == "running",
+                    EvaluationRun.started_at < now - timedelta(seconds=max_age_s),
+                )
+                .values(
+                    status="failed",
+                    error=f"abandoned: still running after {max_age_s / 3600:g} h; the process "
+                    "ended without finishing (killed, or the machine slept)",
+                    finished_at=now,
+                )
+            )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def list_runs(self, requested_by: str | None, limit: int = 50) -> list[EvaluationRun]:
         """Runs started by `requested_by`, or every run when None (operator view: runs started

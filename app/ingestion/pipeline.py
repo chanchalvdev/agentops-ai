@@ -285,7 +285,7 @@ class IngestionService:
             raise NotFoundError("Chunk not found")
         return row[0], row[1]
 
-    async def list(
+    async def list_documents(
         self, tenant_id: str, *, limit: int, offset: int, status: DocumentStatus | None = None
     ) -> tuple[list[Document], int]:
         conditions = [Document.tenant_id == tenant_id]

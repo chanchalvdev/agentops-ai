@@ -247,3 +247,23 @@ async def test_eval_results_persist_cost_and_usage(services: Services, corpus: P
     a = stored.aggregate
     assert a["cost_per_request_usd"] == 0.0
     assert a["hosted_equivalent"]["total_usd"] is None  # no reference prices configured
+
+
+async def test_default_drift_head_ignores_experiment_runs(services: Services, corpus: Path) -> None:
+    ds = dataset(
+        [
+            {
+                "id": "rpo",
+                "category": "answerable",
+                "question": "What is the recovery point objective RPO?",
+                "expected_sources": ["dr.md"],
+                "must_contain": [["5 minutes"]],
+            }
+        ]
+    )
+    plain = await run_retrieval_eval(services, ds, k=2)  # the server's own configuration
+    probe = await run_retrieval_eval(services, ds, k=2, profile="degraded-chunking")  # newer
+
+    check = await MonitoringService(services).check("tenant_a", persist=False)
+    assert check.report.references["retrieval_head"] == str(plain.run_id)
+    assert str(probe.run_id) not in str(check.report.references)

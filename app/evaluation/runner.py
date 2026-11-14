@@ -125,7 +125,7 @@ class EvaluationRunner:
         while result.status == "awaiting_approval" and case.approval and decisions < _MAX_DECISIONS:
             pending = [
                 a
-                for a in await self.s.approvals.list(self.tenant, "pending", 200)
+                for a in await self.s.approvals.find(self.tenant, "pending", 200)
                 if a.execution_id == result.execution_id
             ]
             if not pending:
@@ -238,6 +238,7 @@ class EvaluationRunner:
             for c in dataset.cases
             if (not case_ids or c.id in case_ids) and (not categories or c.category in categories)
         ]
+        await self.store.expire_stale(self.s.settings.eval_stale_after_s)
         await self.prepare_corpus(corpus_dirs or self.s.settings.eval_corpus_dirs)
         config = run_config(self.s, mode, use_judge)
         config["case_filter"] = {"ids": case_ids, "categories": categories}

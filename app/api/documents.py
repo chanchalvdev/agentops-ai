@@ -100,7 +100,7 @@ async def list_documents(
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
 ) -> DocumentList:
-    docs, total = await services.ingestion.list(
+    docs, total = await services.ingestion.list_documents(
         principal.tenant_id, limit=limit, offset=offset, status=status_filter
     )
     return DocumentList(

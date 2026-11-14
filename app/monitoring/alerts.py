@@ -89,7 +89,12 @@ class MonitoringService:
         async with self.s.sessions() as session:
             rows = await session.scalars(
                 select(EvaluationRun)
-                .where(EvaluationRun.status == "completed", EvaluationRun.mode == mode)
+                .where(
+                    EvaluationRun.status == "completed",
+                    EvaluationRun.mode == mode,
+                    # The server's own configuration, never an experiment profile's run.
+                    EvaluationRun.config["profile"].astext.is_(None),
+                )
                 .order_by(EvaluationRun.started_at.desc())
                 .limit(20)
             )
@@ -126,7 +131,9 @@ class MonitoringService:
             eval_head = await self.latest_eval_run(eval_base.mode)
         retrieval_base = retrieval_base or self.retrieval_baseline()
         if retrieval_head is None:
-            latest = await list_retrieval_reports(self.s, limit=1)
+            # The default "current" state is the server's own configuration, never an experiment
+            # probe: a deliberately degraded profile is not a regression of the running system.
+            latest = await list_retrieval_reports(self.s, limit=1, exclude_experiments=True)
             retrieval_head = latest[0] if latest else None
 
         now = datetime.now(UTC)

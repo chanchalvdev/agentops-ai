@@ -143,7 +143,7 @@ class ApprovalStore:
             assert row is not None
             return row
 
-    async def list(self, tenant_id: str, status: str | None, limit: int = 50) -> list[Approval]:
+    async def find(self, tenant_id: str, status: str | None, limit: int = 50) -> list[Approval]:
         query = select(Approval).where(Approval.tenant_id == tenant_id)
         if status:
             query = query.where(Approval.status == status)

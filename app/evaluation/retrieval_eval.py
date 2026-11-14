@@ -232,11 +232,16 @@ def _to_report(row: RetrievalEvalRun) -> RetrievalReport:
     )
 
 
-async def list_retrieval_reports(services: "Services", limit: int = 20) -> list[RetrievalReport]:
+async def list_retrieval_reports(
+    services: "Services", limit: int = 20, *, exclude_experiments: bool = False
+) -> list[RetrievalReport]:
+    """Newest first. `exclude_experiments` keeps only runs made under the server's own
+    configuration (experiment profiles record their name; e.g. a deliberate degraded probe)."""
+    stmt = select(RetrievalEvalRun)
+    if exclude_experiments:
+        stmt = stmt.where(RetrievalEvalRun.profile.is_(None))
     async with services.sessions() as session:
-        rows = await session.scalars(
-            select(RetrievalEvalRun).order_by(RetrievalEvalRun.created_at.desc()).limit(limit)
-        )
+        rows = await session.scalars(stmt.order_by(RetrievalEvalRun.created_at.desc()).limit(limit))
         return [_to_report(r) for r in rows]
 
 

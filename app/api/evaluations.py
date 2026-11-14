@@ -91,9 +91,9 @@ async def run_evaluation(
 async def list_runs(
     services: ServicesDep, principal: AdminDep, limit: int = Query(default=20, ge=1, le=100)
 ) -> Any:
-    return await EvaluationStore(services.sessions).list_runs(
-        None, limit
-    )  # operator-only route: every run
+    store = EvaluationStore(services.sessions)
+    await store.expire_stale(services.settings.eval_stale_after_s)
+    return await store.list_runs(None, limit)  # operator-only route: every run
 
 
 @router.get("/runs/{run_id}", response_model=RunReport, summary="Run with per-case results")

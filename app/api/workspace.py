@@ -158,7 +158,7 @@ async def audit(
     services: ServicesDep, principal: PrincipalDep, limit: int = Query(default=100, ge=1, le=500)
 ) -> Any:
     _require(principal, "workspace:read")
-    return await services.workspace_audit.list(principal.tenant_id, limit)
+    return await services.workspace_audit.recent(principal.tenant_id, limit)
 
 
 @router.websocket("/terminal")

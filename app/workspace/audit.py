@@ -62,7 +62,7 @@ class DbAudit:
         async with self._sessions() as session, session.begin():
             session.add(WorkspaceAuditEvent(**entry.model_dump()))
 
-    async def list(self, tenant_id: str, limit: int = 100) -> list[WorkspaceAuditEvent]:
+    async def recent(self, tenant_id: str, limit: int = 100) -> list[WorkspaceAuditEvent]:
         async with self._sessions() as session:
             rows = await session.scalars(
                 select(WorkspaceAuditEvent)

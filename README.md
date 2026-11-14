@@ -342,10 +342,15 @@ reported as `0` with `pricing_source: "local"`; hosted models without a configur
 - Web UI: no login of its own (the API key is the credential, kept in browser local storage);
   one terminal command at a time (not a PTY); the approval preview diffs against the file's
   first 20 KB when it is larger; no mobile layout.
-- An evaluation run whose process is killed (e.g. the machine sleeps) stays `running` in the
-  database; only a graceful cancel marks it failed.
-- The drift check's default "current" retrieval report is simply the latest one, which can be an
-  experiment probe (e.g. `degraded-chunking`); pass the reports explicitly for a clean comparison.
+- An evaluation run whose process is killed (e.g. the machine sleeps) is only marked `failed`
+  after `AGENTOPS_EVAL_STALE_AFTER_S` (default 4 h; there is no progress heartbeat), when runs are
+  listed or a new run starts.
+- The drift check's default "current" runs are the latest ones made under the server's own
+  configuration; experiment runs (any profile, e.g. `degraded-chunking`) are only compared when
+  passed explicitly.
+- The containerised API (`docker compose --profile app`) has been verified to start, migrate, and
+  reach the database; on macOS it cannot reach an Ollama that listens on loopback only, so the
+  demo has been run end to end with the API outside Docker.
 - Rate limits and caches are in-process: with several API replicas each has its own buckets and
   caches (Redis would be the next step). The workspace WebSocket terminal is not rate limited.
 - Indexing is fail-closed: a document is unsearchable while reindexing, a failed reindex drops its

@@ -77,3 +77,36 @@ async def test_operators_see_evaluation_runs_started_from_the_cli(
     assert detail.status_code == 200, detail.text
     denied = await client.get("/api/v1/evaluations/runs", headers={"X-API-Key": KEY_B})
     assert denied.status_code == 403
+
+
+async def test_abandoned_running_evaluations_are_marked_failed(
+    client: httpx.AsyncClient, services: Any
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from app.db.models import EvaluationRun
+    from app.evaluation.dataset import Dataset, EvalCase
+    from app.evaluation.store import EvaluationStore
+
+    store = EvaluationStore(services.sessions)
+    case = EvalCase.model_validate(
+        {"id": "c1", "category": "answerable", "question": "q?", "dataset_version": "t1"}
+    )
+    ds_id = await store.upsert_dataset(
+        Dataset(name="golden_questions", version="t1", sha256="v" * 64, cases=[case])
+    )
+    old = await store.start_run(ds_id, "cli", "graph", {"mode": "graph"})
+    fresh = await store.start_run(ds_id, "cli", "graph", {"mode": "graph"})
+    async with services.sessions() as session, session.begin():  # the process died 5 h ago
+        await session.execute(
+            update(EvaluationRun)
+            .where(EvaluationRun.id == old.id)
+            .values(started_at=datetime.now(UTC) - timedelta(hours=5))
+        )
+
+    runs = {r["id"]: r for r in (await client.get("/api/v1/evaluations/runs")).json()}
+    assert runs[str(old.id)]["status"] == "failed"
+    assert "abandoned" in runs[str(old.id)]["error"]
+    assert runs[str(fresh.id)]["status"] == "running"  # may still be in progress

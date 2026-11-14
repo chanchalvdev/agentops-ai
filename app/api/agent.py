@@ -191,7 +191,7 @@ async def list_approvals(
     status: Literal["pending", "approved", "rejected", "all"] = Query(default="pending"),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> Any:
-    return await services.approvals.list(
+    return await services.approvals.find(
         principal.tenant_id, None if status == "all" else status, limit
     )
 

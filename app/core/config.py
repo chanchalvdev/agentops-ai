@@ -125,6 +125,9 @@ class Settings(BaseSettings):
     eval_datasets_dir: Path = Path("datasets")
     eval_corpus_dirs: list[Path] = [Path("datasets/corpus")]
     eval_workspace_seed: Path = Path("datasets/eval_workspace")
+    # A run still "running" after this long lost its process (killed, machine slept) and is
+    # marked failed when runs are listed or a new run starts. A full live run takes ~40 min.
+    eval_stale_after_s: float = Field(default=4 * 3600, ge=600)
 
     # Monitoring (product.txt 13): references the drift check compares against, versioned files.
     monitoring_eval_baseline: Path = Path("datasets/baselines/golden-v1-graph-qwen3-8b-day4.json")

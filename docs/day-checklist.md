@@ -271,3 +271,11 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [ ] An evaluation run killed with its process (machine sleep) stays `running`; only a graceful cancel marks it failed
 - [ ] Drift check's default retrieval head is the latest report, which can be an experiment probe
 - [ ] UI: API key in local storage is the only credential; terminal is one command at a time; no mobile layout
+
+## After Day 5 — open-item fixes (branch `post-day-5-fixes`)
+- [x] Drift check's default "current" eval and retrieval runs exclude experiment profiles (a deliberate `degraded-chunking` probe was being reported as drift of the running system); filter in SQL; regression test
+- [x] Abandoned evaluation runs (process killed, machine slept) are marked `failed` after `AGENTOPS_EVAL_STALE_AFTER_S` (default 4 h) when runs are listed or a new run starts; regression test
+- [x] Remaining methods named `list` renamed (`IngestionService.list_documents`, `ApprovalStore.find`, `DbAudit.recent`): the Day 5 import trap
+- [x] 375 tests pass with `-W error`; ruff and mypy strict clean
+- [ ] Demo through `docker compose --profile app`: the image builds, migrates, and reaches the database (`/ready`: database ok), but on macOS the container cannot reach an Ollama bound to loopback; needs Ollama listening beyond loopback (a decision for the machine's owner: it exposes Ollama to the local network)
+
