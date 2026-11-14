@@ -1,7 +1,10 @@
+import { RefreshCw, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Empty, ErrorBox, Spinner, useLoad } from "../components/ui";
+import { Button, Empty, ErrorBox, PageHead, Panel, Spinner, Status, cx, inputClass, useLoad } from "../components/ui";
 import { api } from "../lib/api";
 import { bytes, when } from "../lib/format";
+
+const ACCEPT = ".txt,.md,.markdown,.pdf";
 
 export default function Documents() {
   const docs = useLoad(() => api.documents());
@@ -10,6 +13,8 @@ export default function Documents() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
   // Indexing runs in the background on the server; poll while anything is still in flight.
@@ -33,117 +38,187 @@ export default function Documents() {
       setError(e);
     } finally {
       setBusy(null);
+      setConfirming(null);
     }
   }
 
+  const upload = () => {
+    if (!file) return;
+    void act("upload", async () => {
+      const r = await api.upload(file, metadata);
+      setFile(null);
+      if (input.current) input.current.value = "";
+      return r.duplicate
+        ? `${file.name} is already on record (identical content), so it was not indexed again.`
+        : `${file.name} is uploaded. Chunking and embedding run in the background.`;
+    });
+  };
+
+  const items = docs.data?.items ?? [];
   return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <h1 className="text-xl font-semibold">Documents</h1>
-      <Card title="Upload">
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!file) return;
-            void act("upload", async () => {
-              const r = await api.upload(file, metadata);
-              setFile(null);
-              if (input.current) input.current.value = "";
-              return r.duplicate
-                ? `${file.name} is already uploaded (identical content): not indexed again.`
-                : `Uploaded ${file.name}; indexing runs in the background.`;
-            });
-          }}
-        >
-          <label className="text-sm">
-            <span className="mb-1 block text-xs text-slate-500">TXT, Markdown, or PDF</span>
-            <input
-              ref={input}
-              type="file"
-              accept=".txt,.md,.markdown,.pdf"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="text-sm"
-            />
-          </label>
-          <label className="min-w-64 flex-1 text-sm">
-            <span className="mb-1 block text-xs text-slate-500">Metadata (optional flat JSON)</span>
-            <input
-              value={metadata}
-              onChange={(e) => setMetadata(e.target.value)}
-              placeholder='{"team": "payments"}'
-              className="w-full rounded-md border border-slate-300 bg-transparent px-2 py-1.5 font-mono text-xs dark:border-slate-700"
-            />
-          </label>
-          <Button type="submit" variant="primary" disabled={!file || busy !== null}>
-            {busy === "upload" ? <Spinner /> : null} Upload
-          </Button>
-        </form>
-        {notice && <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-400">{notice}</p>}
-      </Card>
-      <ErrorBox error={error ?? docs.error} />
-      <Card
-        title={`Your documents${docs.data ? ` (${docs.data.total})` : ""}`}
-        actions={<Button onClick={() => void docs.reload()}>{docs.loading ? <Spinner /> : null} Refresh</Button>}
+    <div className="mx-auto max-w-6xl px-8 py-8">
+      <PageHead
+        title="Documents"
+        sub="The corpus the agent may cite. Answers can only point at passages from documents that are ready."
+      />
+
+      <form
+        className="mb-10 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end"
+        onSubmit={(e) => {
+          e.preventDefault();
+          upload();
+        }}
       >
-        {docs.data && docs.data.items.length === 0 ? (
-          <Empty>No documents yet. Upload one above, or run `agentops ingest datasets/corpus`.</Empty>
+        <label
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            const f = e.dataTransfer.files[0];
+            if (f) setFile(f);
+          }}
+          className={cx(
+            "flex h-[68px] cursor-pointer items-center gap-3 border-1.5 border-dashed px-4 transition-colors",
+            dragging ? "border-stamp bg-stamp-soft" : "border-ink/40 bg-paper hover:border-ink",
+          )}
+        >
+          <Upload className="h-5 w-5 shrink-0 text-ink-2" aria-hidden />
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold">{file ? file.name : "Drop a file, or choose one"}</span>
+            <span className="block text-xs text-ink-2">{file ? bytes(file.size) : "TXT, Markdown, or PDF with a text layer"}</span>
+          </span>
+          <input
+            ref={input}
+            type="file"
+            accept={ACCEPT}
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            className="sr-only"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-semibold text-ink-2">Metadata, optional flat JSON</span>
+          <input
+            value={metadata}
+            onChange={(e) => setMetadata(e.target.value)}
+            placeholder='{"team": "payments"}'
+            className={cx(inputClass, "h-[44px] font-mono text-xs")}
+          />
+        </label>
+        <Button type="submit" variant="primary" disabled={!file} busy={busy === "upload"}>
+          Upload
+        </Button>
+      </form>
+
+      <div className="mb-6 space-y-3" aria-live="polite">
+        {notice && <p className="border border-record/35 bg-record-soft px-4 py-2.5 text-sm text-record">{notice}</p>}
+        <ErrorBox error={error ?? docs.error} />
+      </div>
+
+      <Panel
+        title="On record"
+        meta={docs.data ? `${docs.data.total} document${docs.data.total === 1 ? "" : "s"}` : undefined}
+        actions={
+          <Button size="sm" variant="ghost" onClick={() => void docs.reload()} busy={docs.loading && !!docs.data}>
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Refresh
+          </Button>
+        }
+        flush
+      >
+        {!docs.data && docs.loading ? (
+          <div className="py-10">
+            <Spinner />
+          </div>
+        ) : items.length === 0 ? (
+          <div className="pt-4">
+            <Empty title="No documents yet">
+              Upload one above, or index the sample corpus with <code className="font-mono">agentops ingest datasets/corpus</code>.
+            </Empty>
+          </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs text-slate-500">
-              <tr>
-                <th className="py-1">File</th>
-                <th>Version</th>
-                <th>Status</th>
-                <th className="text-right">Chunks</th>
-                <th className="text-right">Size</th>
-                <th>Updated</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {docs.data?.items.map((d) => (
-                <tr key={d.id} className="border-t border-slate-100 align-top dark:border-slate-800">
-                  <td className="py-2">
-                    <div className="font-medium">{d.filename}</div>
-                    {Object.keys(d.metadata).length > 0 && (
-                      <div className="font-mono text-xs text-slate-500">{JSON.stringify(d.metadata)}</div>
-                    )}
-                    {d.error && <div className="text-xs text-rose-600">{d.error}</div>}
-                  </td>
-                  <td>
-                    v{d.version} {d.is_latest ? <Badge tone="blue">latest</Badge> : null}
-                  </td>
-                  <td>
-                    <Badge>{d.status}</Badge>
-                  </td>
-                  <td className="text-right tabular-nums">{d.chunk_count}</td>
-                  <td className="text-right tabular-nums">{bytes(d.size_bytes)}</td>
-                  <td className="text-xs text-slate-500">{when(d.updated_at)}</td>
-                  <td className="space-x-1 whitespace-nowrap text-right">
-                    <Button
-                      disabled={busy !== null}
-                      onClick={() => void act(`reindex-${d.id}`, () => api.reindex(d.id), `Reindexing ${d.filename}.`)}
-                      title="Re-chunk and re-embed with the current configuration"
-                    >
-                      Reindex
-                    </Button>
-                    <Button
-                      variant="danger"
-                      disabled={busy !== null}
-                      onClick={() => {
-                        if (window.confirm(`Delete ${d.filename} v${d.version} and its chunks?`))
-                          void act(`delete-${d.id}`, () => api.deleteDocument(d.id), `Deleted ${d.filename}.`);
-                      }}
-                    >
-                      Delete
-                    </Button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-rule text-left text-xs font-semibold text-ink-2">
+                  <th className="py-2.5 pr-4 font-semibold">File</th>
+                  <th className="px-4 font-semibold">Version</th>
+                  <th className="px-4 font-semibold">Status</th>
+                  <th className="px-4 text-right font-semibold">Chunks</th>
+                  <th className="px-4 text-right font-semibold">Size</th>
+                  <th className="px-4 font-semibold">Updated</th>
+                  <th className="pl-4">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-rule">
+                {items.map((d) => (
+                  <tr key={d.id} className="align-top hover:bg-wash/60">
+                    <td className="max-w-[340px] py-3 pr-4">
+                      <div className="truncate font-semibold" title={d.filename}>
+                        {d.filename}
+                      </div>
+                      {Object.keys(d.metadata).length > 0 && (
+                        <div className="mt-0.5 truncate font-mono text-xs text-ink-2">{JSON.stringify(d.metadata)}</div>
+                      )}
+                      {d.error && <div className="mt-0.5 text-xs text-seal">{d.error}</div>}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <span className="font-mono">v{d.version}</span>
+                      {d.is_latest && <span className="ml-2 text-xs text-ink-2">latest</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Status value={d.status} />
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono">{d.chunk_count}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right font-mono">{bytes(d.size_bytes)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-2">{when(d.updated_at)}</td>
+                    <td className="py-2 pl-4">
+                      <div className="flex justify-end gap-1.5">
+                        {confirming === d.id ? (
+                          <>
+                            <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
+                              Keep
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              busy={busy === `delete-${d.id}`}
+                              onClick={() => void act(`delete-${d.id}`, () => api.deleteDocument(d.id), `Deleted ${d.filename} v${d.version} and its chunks.`)}
+                            >
+                              Delete v{d.version} and its chunks
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={busy !== null}
+                              busy={busy === `reindex-${d.id}`}
+                              title="Re-chunk and re-embed with the current configuration"
+                              onClick={() => void act(`reindex-${d.id}`, () => api.reindex(d.id), `Reindexing ${d.filename}.`)}
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Reindex
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => setConfirming(d.id)} title={`Delete ${d.filename}`}>
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                              <span className="sr-only">Delete {d.filename}</span>
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </Card>
+      </Panel>
     </div>
   );
 }

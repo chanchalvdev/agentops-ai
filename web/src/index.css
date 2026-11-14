@@ -1,8 +1,88 @@
+@import "@fontsource-variable/public-sans/index.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  color-scheme: light dark;
+@layer base {
+  :root {
+    color-scheme: light;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-ground font-sans text-base text-ink;
+    font-feature-settings: "ss01", "cv11";
+  }
+  /* The parts the browser draws still carry the record's ink. */
+  ::selection {
+    background: #ece7f6;
+    color: #45307d;
+  }
+  input,
+  textarea {
+    caret-color: #5b3fa0;
+  }
+  :focus-visible {
+    outline: 2px solid #5b3fa0;
+    outline-offset: 2px;
+  }
+  a {
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+  .font-mono,
+  code,
+  pre,
+  kbd {
+    font-variant-numeric: tabular-nums slashed-zero;
+    font-feature-settings: "zero", "calt" 0;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #c9ccc4 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #c9ccc4;
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #9ba1a8;
+  }
+  ::placeholder {
+    color: #5e6678;
+    opacity: 1;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
 }

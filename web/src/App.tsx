@@ -1,6 +1,8 @@
-import { Component, useCallback, useEffect, useState, type ReactNode } from "react";
-import { Badge, Button, cx } from "./components/ui";
+import { Activity, Files, FolderTree, KeyRound, MessageSquareText, ScrollText, Stamp, type LucideIcon } from "lucide-react";
+import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { cx } from "./components/ui";
 import { api, getApiKey, setApiKey } from "./lib/api";
+import type { ScreenId } from "./lib/nav";
 import Approvals from "./screens/Approvals";
 import Chat from "./screens/Chat";
 import Documents from "./screens/Documents";
@@ -8,20 +10,35 @@ import Evaluations from "./screens/Evaluations";
 import Executions from "./screens/Executions";
 import Workspace from "./screens/Workspace";
 
-const SCREENS = [
-  { id: "chat", label: "Chat" },
-  { id: "documents", label: "Documents" },
-  { id: "workspace", label: "Workspace" },
-  { id: "approvals", label: "Approvals" },
-  { id: "executions", label: "Executions" },
-  { id: "evaluations", label: "Evaluations & Monitoring" },
-] as const;
-type ScreenId = (typeof SCREENS)[number]["id"];
+const SCREENS: { id: ScreenId; label: string; icon: LucideIcon }[] = [
+  { id: "chat", label: "Ask", icon: MessageSquareText },
+  { id: "documents", label: "Documents", icon: Files },
+  { id: "workspace", label: "Workspace", icon: FolderTree },
+  { id: "approvals", label: "Approvals", icon: Stamp },
+  { id: "executions", label: "Executions", icon: ScrollText },
+  { id: "evaluations", label: "Evals & drift", icon: Activity },
+];
 
 function parseHash(): { screen: ScreenId; arg?: string } {
   const [, screen, arg] = location.hash.split("/");
   const found = SCREENS.find((s) => s.id === screen);
   return { screen: found ? found.id : "chat", arg: arg ? decodeURIComponent(arg) : undefined };
+}
+
+/** One broken screen must not blank the whole app: show the error and keep the navigation. */
+class ScreenBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div role="alert" className="border border-seal/35 bg-seal-soft p-4 text-sm text-seal">
+        This screen failed to render: {this.state.error.message}
+      </div>
+    );
+  }
 }
 
 function Connection({ apiKey, onKey }: { apiKey: string; onKey: (k: string) => void }) {
@@ -31,8 +48,7 @@ function Connection({ apiKey, onKey }: { apiKey: string; onKey: (k: string) => v
   const check = useCallback(async () => {
     const next: typeof state = {};
     try {
-      const r = await api.ready();
-      next.ready = r.status;
+      next.ready = (await api.ready()).status;
     } catch {
       next.ready = "unreachable";
     }
@@ -50,63 +66,93 @@ function Connection({ apiKey, onKey }: { apiKey: string; onKey: (k: string) => v
     void check();
   }, [check]);
 
+  const ok = state.ready === "ready";
   return (
-    <div className="space-y-2 border-t border-slate-200 p-3 text-xs dark:border-slate-800">
-      <label className="block font-medium text-slate-600 dark:text-slate-400" htmlFor="api-key">
-        API key
-      </label>
+    <div className="border-t-1.5 border-ink px-4 py-4">
+      <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-manila-ink">
+        <span className={cx("h-2 w-2", ok ? "bg-record" : state.ready ? "bg-seal" : "bg-manila-ink/40")} aria-hidden />
+        <span>API {state.ready ?? "checking…"}</span>
+        {state.tenant && <span className="ml-auto font-mono text-ink">{state.tenant}</span>}
+      </div>
       <form
-        className="flex gap-1"
+        className="flex"
         onSubmit={(e) => {
           e.preventDefault();
           onKey(draft.trim());
         }}
       >
-        <input
-          id="api-key"
-          type="password"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="dev-key-tenant-a"
-          className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-950"
-        />
-        <Button type="submit">Save</Button>
+        <label htmlFor="api-key" className="sr-only">
+          API key
+        </label>
+        <div className="relative min-w-0 flex-1">
+          <KeyRound className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-manila-ink" aria-hidden />
+          <input
+            id="api-key"
+            type="password"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="API key"
+            autoComplete="off"
+            className="h-8 w-full border-1.5 border-ink bg-manila-hover/60 pl-7 pr-2 text-xs text-ink placeholder:text-manila-ink focus:bg-paper focus:outline-none"
+          />
+        </div>
+        <button type="submit" className="h-8 border-1.5 border-l-0 border-ink bg-ink px-2.5 text-xs font-semibold text-paper hover:bg-[#25304a]">
+          Use
+        </button>
       </form>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span>API</span>
-        <Badge tone={state.ready === "ready" ? "green" : state.ready ? "amber" : "gray"}>{state.ready ?? "…"}</Badge>
-        {state.tenant && (
-          <>
-            <span>tenant</span>
-            <Badge tone="blue">{state.tenant}</Badge>
-          </>
-        )}
-      </div>
-      {!apiKey && <p className="text-amber-700 dark:text-amber-400">Enter your API key to start.</p>}
-      {state.error && <p className="text-rose-600">{state.error}</p>}
+      {!apiKey && <p className="mt-2 text-xs font-semibold text-ink">Enter your API key to start (dev: dev-key-tenant-a).</p>}
+      {state.error && <p className="mt-2 text-xs font-semibold text-seal">{state.error}</p>}
     </div>
   );
 }
 
-/** One broken screen must not blank the whole app: show the error and keep the navigation. */
-class ScreenBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
-  state = { error: null as Error | null };
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-  render() {
-    if (!this.state.error) return this.props.children;
-    return (
-      <div className="rounded-md border border-rose-300 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-        This screen failed to render: {this.state.error.message}
-      </div>
-    );
-  }
+interface Counts {
+  approvals: number;
+  documents: number | null;
+  runs: number | null; // executions in the last 24 h
+}
+
+/** The rail's counts: pending approvals (polled), documents on record, and runs in 24 h. */
+function useCounts(apiKey: string): Counts {
+  const [counts, setCounts] = useState<Counts>({ approvals: 0, documents: null, runs: null });
+  useEffect(() => {
+    if (!apiKey) return;
+    let alive = true;
+    const poll = async () => {
+      const [approvals, documents, runs] = await Promise.allSettled([
+        api.approvals("pending"),
+        api.documents(),
+        api.whoami(),
+      ]);
+      if (!alive) return;
+      setCounts({
+        approvals: approvals.status === "fulfilled" ? approvals.value.length : 0,
+        documents: documents.status === "fulfilled" ? documents.value.total : null,
+        runs: runs.status === "fulfilled" ? runs.value.executions : null,
+      });
+    };
+    void poll();
+    const t = setInterval(poll, 15_000);
+    const onEvent = () => void poll();
+    for (const name of ["focus", "agentops:approvals", "agentops:counts"]) window.addEventListener(name, onEvent);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      for (const name of ["focus", "agentops:approvals", "agentops:counts"]) window.removeEventListener(name, onEvent);
+    };
+  }, [apiKey]);
+  return counts;
 }
 
 export default function App() {
   const [route, setRoute] = useState(parseHash);
   const [apiKey, setKey] = useState(getApiKey);
+  const counts = useCounts(apiKey);
+  const activeItem = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    // On the narrow top bar the nav scrolls; keep the current screen visible, never under the fade.
+    activeItem.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [route.screen]);
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
     window.addEventListener("hashchange", onHash);
@@ -119,39 +165,75 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen">
-      <nav className="flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-        <div className="px-4 py-4">
-          <div className="text-base font-bold tracking-tight">AgentOps AI</div>
-          <div className="text-xs text-slate-500">local agentic RAG</div>
+    <div className="flex h-full flex-col md:grid md:grid-cols-[232px_minmax(0,1fr)]">
+      <nav className="flex shrink-0 flex-col bg-manila text-ink md:min-h-0" aria-label="Primary">
+        <div className="flex items-center justify-between gap-3 border-b-1.5 border-ink px-5 py-3 md:block md:pb-4 md:pt-5">
+          <div>
+            <div className="text-xl font-extrabold leading-none">AgentOps AI</div>
+            <div className="mt-1.5 hidden text-xs font-semibold text-manila-ink md:block">Every answer on the record</div>
+          </div>
+          <details className="relative md:hidden">
+            <summary className="cursor-pointer list-none text-xs font-semibold underline">Connection</summary>
+            <div className="absolute right-0 top-7 z-30 w-72 border-1.5 border-ink bg-manila">
+              <Connection apiKey={apiKey} onKey={saveKey} />
+            </div>
+          </details>
         </div>
-        <ul className="flex-1 space-y-0.5 px-2">
-          {SCREENS.map((s) => (
-            <li key={s.id}>
-              <a
-                href={`#/${s.id}`}
-                className={cx(
-                  "block rounded-md px-3 py-1.5 text-sm",
-                  route.screen === s.id
-                    ? "bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
-                    : "text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
-                )}
-              >
-                {s.label}
-              </a>
-            </li>
-          ))}
+        <ul className="flex scroll-px-24 gap-0.5 overflow-x-auto px-2.5 py-2 pr-10 [mask-image:linear-gradient(to_right,black_82%,transparent)] md:pr-2.5 md:[mask-image:none] md:flex-1 md:flex-col md:space-y-0.5 md:overflow-y-auto md:py-3">
+          {SCREENS.map(({ id, label, icon: Icon }) => {
+            const on = route.screen === id;
+            return (
+              <li key={id}>
+                <a
+                  href={`#/${id}`}
+                  ref={on ? activeItem : undefined}
+                  aria-current={on ? "page" : undefined}
+                  className={cx(
+                    "flex h-9 items-center gap-2.5 whitespace-nowrap px-2.5 text-md font-semibold transition-colors duration-150",
+                    on ? "bg-ink text-paper" : "text-ink hover:bg-manila-hover",
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                  <span className="md:flex-1">{label}</span>
+                  {id === "approvals" && counts.approvals > 0 && (
+                    <span
+                      className="min-w-5 bg-stamp px-1.5 text-center font-mono text-xs font-bold leading-5 text-white"
+                      aria-label={`${counts.approvals} pending`}
+                    >
+                      {counts.approvals}
+                    </span>
+                  )}
+                  {id === "documents" && counts.documents != null && (
+                    <span className={cx("font-mono text-xs", on ? "text-paper/70" : "text-manila-ink")} aria-label={`${counts.documents} on record`}>
+                      {counts.documents}
+                    </span>
+                  )}
+                  {id === "executions" && counts.runs != null && (
+                    <span
+                      className={cx("font-mono text-xs", on ? "text-paper/70" : "text-manila-ink")}
+                      title="Runs in the last 24 hours"
+                      aria-label={`${counts.runs} runs in the last 24 hours`}
+                    >
+                      {counts.runs}
+                    </span>
+                  )}
+                </a>
+              </li>
+            );
+          })}
         </ul>
-        <Connection apiKey={apiKey} onKey={saveKey} />
+        <div className="hidden md:block">
+          <Connection apiKey={apiKey} onKey={saveKey} />
+        </div>
       </nav>
-      <main className="min-w-0 flex-1 overflow-y-auto p-6" key={`${apiKey}:${route.screen}`}>
+      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto" key={`${apiKey}:${route.screen}`}>
         <ScreenBoundary>
-        {route.screen === "chat" && <Chat />}
-        {route.screen === "documents" && <Documents />}
-        {route.screen === "workspace" && <Workspace />}
-        {route.screen === "approvals" && <Approvals />}
-        {route.screen === "executions" && <Executions selected={route.arg} />}
-        {route.screen === "evaluations" && <Evaluations selected={route.arg} />}
+          {route.screen === "chat" && <Chat openId={route.arg} />}
+          {route.screen === "documents" && <Documents />}
+          {route.screen === "workspace" && <Workspace initialPath={route.arg} />}
+          {route.screen === "approvals" && <Approvals />}
+          {route.screen === "executions" && <Executions selected={route.arg} />}
+          {route.screen === "evaluations" && <Evaluations selected={route.arg} />}
         </ScreenBoundary>
       </main>
     </div>

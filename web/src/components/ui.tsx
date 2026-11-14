@@ -1,3 +1,4 @@
+import { AlertTriangle, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "../lib/api";
 
@@ -5,76 +6,109 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
 }
 
+type Variant = "primary" | "secondary" | "danger" | "ghost" | "seal";
+
+const VARIANTS: Record<Variant, string> = {
+  primary: "bg-ink text-paper hover:bg-[#25304a] active:bg-[#0f1626]",
+  secondary: "border-1.5 border-ink bg-paper text-ink hover:bg-wash",
+  danger: "border-1.5 border-seal bg-paper text-seal hover:bg-seal-soft",
+  ghost: "text-ink-2 hover:bg-wash hover:text-ink",
+  seal: "bg-stamp text-white hover:bg-stamp-deep",
+};
+
 export function Button({
   children,
   onClick,
-  variant = "default",
+  variant = "secondary",
+  size = "md",
   disabled,
   type = "button",
   title,
+  busy,
 }: {
   children: ReactNode;
   onClick?: () => void;
-  variant?: "default" | "primary" | "danger" | "ghost";
+  variant?: Variant;
+  size?: "sm" | "md";
   disabled?: boolean;
   type?: "button" | "submit";
   title?: string;
+  busy?: boolean;
 }) {
-  const styles = {
-    default:
-      "border border-slate-300 bg-white hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800",
-    primary: "bg-indigo-600 text-white hover:bg-indigo-500",
-    danger: "bg-rose-600 text-white hover:bg-rose-500",
-    ghost: "hover:bg-slate-200/60 dark:hover:bg-slate-800",
-  }[variant];
   return (
     <button
       type={type}
       title={title}
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
       className={cx(
-        "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
-        styles,
+        "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-semibold transition-colors duration-150 ease-out",
+        "disabled:cursor-not-allowed disabled:opacity-45",
+        size === "sm" ? "h-7 px-2.5 text-xs" : "h-9 px-3.5 text-sm",
+        VARIANTS[variant],
       )}
     >
+      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
       {children}
     </button>
   );
 }
 
-export function Card({ title, actions, children, className }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) {
+/** A ruled section of a record: a heading on an ink rule, no box. */
+export function Panel({
+  title,
+  meta,
+  actions,
+  children,
+  className,
+  flush,
+}: {
+  title: ReactNode;
+  meta?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  flush?: boolean;
+}) {
   return (
-    <section className={cx("rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900", className)}>
-      {(title || actions) && (
-        <header className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5 dark:border-slate-800">
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <div className="flex items-center gap-2">{actions}</div>
-        </header>
-      )}
-      <div className="p-4">{children}</div>
+    <section className={cx("min-w-0", className)}>
+      <header className="flex min-h-9 items-end justify-between gap-3 border-b-1.5 border-ink pb-2">
+        <div className="flex min-w-0 items-baseline gap-3">
+          <h2 className="truncate text-lg font-bold">{title}</h2>
+          {meta && <span className="truncate text-sm text-ink-2">{meta}</span>}
+        </div>
+        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      </header>
+      <div className={flush ? "" : "pt-4"}>{children}</div>
     </section>
   );
 }
 
-const TONES: Record<string, string> = {
-  green: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  red: "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300",
-  amber: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  blue: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
-  gray: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+export type Tone = "verified" | "critical" | "pending" | "info" | "neutral" | "stamp";
+
+const TONES: Record<Tone, { text: string; bg: string; swatch: string }> = {
+  verified: { text: "text-record", bg: "bg-record-soft", swatch: "bg-record" },
+  critical: { text: "text-seal", bg: "bg-seal-soft", swatch: "bg-seal" },
+  pending: { text: "text-caution", bg: "bg-caution-soft", swatch: "bg-caution" },
+  info: { text: "text-info", bg: "bg-info-soft", swatch: "bg-info" },
+  neutral: { text: "text-ink-2", bg: "bg-wash", swatch: "bg-ink-3" },
+  stamp: { text: "text-stamp", bg: "bg-stamp-soft", swatch: "bg-stamp" },
 };
 
-/** Colour for the statuses the API returns (runs, documents, approvals, signals, audit). */
-export function toneFor(status: string | null | undefined): keyof typeof TONES {
+/** Tone for every status word the API returns. */
+export function toneFor(status: string | null | undefined): Tone {
   switch (status) {
     case "answered":
     case "ready":
-    case "approved":
     case "completed":
     case "ok":
     case "supported":
-      return "green";
+    case "passed":
+    case "verified":
+      return "verified";
+    case "approved":
+      return "stamp";
     case "failed":
     case "failed_validation":
     case "rejected":
@@ -82,9 +116,10 @@ export function toneFor(status: string | null | undefined): keyof typeof TONES {
     case "drift":
     case "critical":
     case "timeout":
-    case "budget_exceeded":
+    case "budget_exhausted":
     case "cancelled":
-      return "red";
+    case "unsupported":
+      return "critical";
     case "insufficient_evidence":
     case "awaiting_approval":
     case "pending":
@@ -92,54 +127,110 @@ export function toneFor(status: string | null | undefined): keyof typeof TONES {
     case "running":
     case "suspected":
     case "warning":
-    case "unsupported":
-      return "amber";
+      return "pending";
     case "insufficient_data":
     case "info":
-      return "blue";
+      return "info";
     default:
-      return "gray";
+      return "neutral";
   }
 }
 
-export function Badge({ children, tone }: { children: ReactNode; tone?: keyof typeof TONES }) {
-  const t = tone ?? toneFor(typeof children === "string" ? children : undefined);
-  return <span className={cx("inline-block rounded px-1.5 py-0.5 text-xs font-medium", TONES[t])}>{children}</span>;
+export const label = (s: string) => s.replace(/_/g, " ");
+
+/** A status mark: a square swatch and the status word, never colour alone. */
+export function Status({ value, tone, className }: { value: string; tone?: Tone; className?: string }) {
+  const t = TONES[tone ?? toneFor(value)];
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center gap-1.5 whitespace-nowrap px-1.5 py-px text-xs font-semibold",
+        t.bg,
+        t.text,
+        className,
+      )}
+    >
+      <span className={cx("h-1.5 w-1.5 shrink-0", t.swatch)} aria-hidden />
+      {label(value)}
+    </span>
+  );
 }
 
-export function Spinner() {
-  return <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />;
+/** A record number: EX-9A49 for executions, AP- approvals, EV- evaluation runs. */
+export function recordId(prefix: string, uuid: string): string {
+  return `${prefix}-${uuid.replace(/-/g, "").slice(0, 4).toUpperCase()}`;
+}
+
+export function RecordId({ prefix, id, invert }: { prefix: string; id: string; invert?: boolean }) {
+  return (
+    <span
+      title={id}
+      className={cx(
+        "inline-block whitespace-nowrap px-1.5 py-px font-mono text-xs font-bold",
+        invert ? "bg-ink text-paper" : "border border-ink/30 text-ink",
+      )}
+    >
+      {recordId(prefix, id)}
+    </span>
+  );
+}
+
+export function Spinner({ className }: { className?: string }) {
+  return <Loader2 className={cx("h-4 w-4 animate-spin text-ink-2", className)} aria-label="Loading" />;
 }
 
 export function ErrorBox({ error }: { error: unknown }) {
   if (!error) return null;
   const e = error instanceof ApiError ? error : null;
   const message = e?.message ?? (error instanceof Error ? error.message : String(error));
+  let hint = "";
+  if (e?.status === 401) hint = "Set a valid API key in the rail.";
+  else if (e?.status === 403) hint = "This API key's tenant is not allowed to do this.";
+  else if (e?.retryAfter) hint = `Rate limited: try again in ${e.retryAfter} s.`;
+  else if (e?.status === 0 || message === "Failed to fetch") hint = "The API is unreachable. Is it running?";
   return (
-    <div className="rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-      {e && <span className="mr-2 font-mono text-xs">{e.status} {e.code}</span>}
-      {message}
-      {e?.status === 401 && " — set a valid API key in the sidebar."}
-      {e?.status === 403 && e.code === "permission_denied" && " — this API key's tenant is not allowed here."}
-      {e?.retryAfter ? ` Retry in ${e.retryAfter} s.` : ""}
-      {e?.requestId && <span className="ml-2 font-mono text-xs opacity-70">request {e.requestId}</span>}
+    <div role="alert" className="flex gap-3 border border-seal/35 bg-seal-soft px-4 py-3 text-sm">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-seal" aria-hidden />
+      <div className="min-w-0">
+        <p className="font-semibold text-seal">
+          {message}
+          {e && <span className="ml-2 font-mono text-xs font-normal">{e.status} {e.code}</span>}
+        </p>
+        {hint && <p className="mt-0.5 text-ink-2">{hint}</p>}
+        {e?.requestId && <p className="mt-0.5 font-mono text-2xs text-ink-3">request {e.requestId}</p>}
+      </div>
     </div>
   );
 }
 
-export function Empty({ children }: { children: ReactNode }) {
-  return <p className="py-6 text-center text-sm text-slate-500">{children}</p>;
-}
-
-export function Mono({ children, className }: { children: ReactNode; className?: string }) {
-  return <pre className={cx("overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-100 p-3 font-mono text-xs dark:bg-slate-950", className)}>{children}</pre>;
-}
-
-export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
+export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="rounded-md border border-slate-200 px-3 py-2 dark:border-slate-800" title={hint}>
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="text-lg font-semibold tabular-nums">{value}</div>
+    <div className="border-1.5 border-dashed border-rule px-6 py-10 text-center">
+      <p className="text-md font-semibold">{title}</p>
+      {children && <div className="mx-auto mt-1 max-w-md text-sm text-ink-2">{children}</div>}
+    </div>
+  );
+}
+
+export function Code({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <pre
+      className={cx(
+        "overflow-auto whitespace-pre-wrap break-words border border-rule bg-paper p-3 font-mono text-xs leading-relaxed text-ink",
+        className,
+      )}
+    >
+      {children}
+    </pre>
+  );
+}
+
+/** A measured figure: the number in tabular mono, its unit and meaning beneath. */
+export function Figure({ value, label: what, hint }: { value: ReactNode; label: string; hint?: string }) {
+  return (
+    <div className="min-w-0" title={hint}>
+      <div className="font-mono text-xl font-medium leading-none">{value}</div>
+      <div className="mt-1.5 text-xs text-ink-2">{what}</div>
     </div>
   );
 }
@@ -172,25 +263,76 @@ export function useLoad<T>(loader: () => Promise<T>, deps: unknown[] = []) {
   return { data, error, loading, reload, setData };
 }
 
-export function Drawer({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode }) {
+/** A side sheet for reading a record without leaving the page. */
+export function Sheet({
+  open,
+  onClose,
+  title,
+  meta,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: ReactNode;
+  meta?: ReactNode;
+  children: ReactNode;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    closeRef.current?.focus();
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex justify-end bg-ink/20" onClick={onClose}>
       <aside
-        className="h-full w-full max-w-xl overflow-y-auto border-l border-slate-200 bg-white p-5 shadow-xl dark:border-slate-800 dark:bg-slate-900"
+        role="dialog"
+        aria-modal="true"
+        className="flex h-full w-full max-w-[560px] animate-sheet flex-col border-l-1.5 border-ink bg-ground shadow-sheet"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 className="text-base font-semibold">{title}</h2>
-          <Button variant="ghost" onClick={onClose}>Close</Button>
-        </div>
-        {children}
+        <header className="flex items-start justify-between gap-4 border-b-1.5 border-ink px-6 py-4">
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold">{title}</h2>
+            {meta && <p className="mt-0.5 text-sm text-ink-2">{meta}</p>}
+          </div>
+          <button
+            ref={closeRef}
+            onClick={onClose}
+            className="-mr-2 grid h-8 w-8 shrink-0 place-items-center text-ink-2 hover:bg-wash hover:text-ink"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
       </aside>
     </div>
   );
 }
+
+/** A page heading: the screen's name and one line on what it is for. */
+export function PageHead({ title, sub, actions }: { title: string; sub?: ReactNode; actions?: ReactNode }) {
+  return (
+    <header className="mb-7 flex flex-wrap items-end justify-between gap-4">
+      <div className="min-w-0">
+        <h1 className="text-3xl font-extrabold">{title}</h1>
+        {sub && <p className="mt-1 max-w-2xl text-md text-ink-2">{sub}</p>}
+      </div>
+      {actions && <div className="flex items-center gap-2">{actions}</div>}
+    </header>
+  );
+}
+
+export const inputClass =
+  "h-9 w-full border-1.5 border-ink/40 bg-paper px-3 text-sm text-ink transition-colors hover:border-ink/70 focus:border-stamp focus:outline-none";
+
+export const selectClass =
+  "h-9 border-1.5 border-ink/40 bg-paper pl-2.5 pr-8 text-sm text-ink hover:border-ink/70 focus:border-stamp focus:outline-none";

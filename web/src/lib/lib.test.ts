@@ -56,3 +56,59 @@ describe("splitCitations", () => {
     ]);
   });
 });
+
+import { buildHands } from "../components/CustodyChain";
+import type { LedgerEvent } from "./types";
+
+const ev = (seq: number, kind: string, name: string, status = "ok", data: Record<string, unknown> = {}, at?: string): LedgerEvent => ({
+  seq,
+  kind,
+  name,
+  status,
+  data,
+  at,
+});
+
+describe("buildHands", () => {
+  it("groups the ledger into signed hands and attaches the approval to the Approval hand", () => {
+    const hands = buildHands([
+      ev(0, "step", "classify_request"),
+      ev(1, "model_call", "classify", "ok", { model: "qwen3:1.7b" }),
+      ev(2, "step", "select_or_execute_tools"),
+      ev(3, "model_call", "select_tools", "ok", { model: "qwen3:8b" }),
+      ev(4, "approval", "workspace_write", "pending"),
+      ev(5, "step", "human_approval"),
+    ]);
+    expect(hands.map((h) => h.step)).toEqual(["Classify", "Tools", "Approval"]);
+    expect(hands[1]).toMatchObject({ signers: ["qwen3:8b"], state: "ok" });
+    expect(hands[2]).toMatchObject({ signers: ["you"], state: "pending" });
+  });
+
+  it("records who countersigned and when, and adds the Approval hand if the run has not reached it", () => {
+    const signed = buildHands([ev(0, "step", "select_or_execute_tools"), ev(1, "approval", "workspace_write", "ok", {}, "2026-11-14T10:00:00Z")]);
+    expect(signed.at(-1)).toMatchObject({ step: "Approval", state: "ok", signedAt: "2026-11-14T10:00:00Z" });
+    const rejected = buildHands([ev(0, "step", "human_approval"), ev(1, "approval", "workspace_edit", "rejected")]);
+    expect(rejected[0]).toMatchObject({ state: "rejected", notes: ["rejected"] });
+  });
+
+  it("counts repeated signers and numbers loop turns", () => {
+    const hands = buildHands([
+      ev(0, "step", "step"),
+      ev(1, "tool_call", "document_search"),
+      ev(2, "tool_call", "document_search", "ok", { cache: "hit" }),
+      ev(3, "step", "step"),
+    ]);
+    expect(hands.map((h) => h.step)).toEqual(["Turn 1", "Turn 2"]);
+    expect(hands[0]).toMatchObject({ signers: ["document_search ×2"], notes: ["cache hit"] });
+  });
+});
+
+import { cleanSnippet } from "../components/Evidence";
+
+describe("cleanSnippet", () => {
+  it("drops markdown heading markers and keeps list items on their own lines", () => {
+    expect(cleanSnippet("## Availability and Recovery - Availability target: 99.95%. - Recovery Point Objective (RPO): 5 minutes")).toBe(
+      "Availability and Recovery\n– Availability target: 99.95%.\n– Recovery Point Objective (RPO): 5 minutes",
+    );
+  });
+});
