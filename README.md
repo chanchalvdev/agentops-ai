@@ -214,7 +214,13 @@ Every switch is a setting, off by default, and grouped into profiles in
 [datasets/experiments.json](datasets/experiments.json). A profile is accepted only if
 `agentops experiment benchmark` shows a >5% gain in latency, tokens, or model calls **and** no
 quality breach against the baseline (same thresholds as the eval gate). Results:
-[docs/benchmarks/day4.md](docs/benchmarks/day4.md).
+[docs/benchmarks/day4.md](docs/benchmarks/day4.md). The server defaults stay at the baseline so
+every benchmark measures one switch at a time; to run the accepted `optimized` profile, set
+`AGENTOPS_AGENT_RULE_ROUTING=true`, `AGENTOPS_CACHE_QUERY_EMBEDDINGS=true`, and
+`AGENTOPS_CACHE_TOOL_RESULTS=true`.
+
+The custom loop and the LangGraph workflow are compared on the same cases in
+[docs/benchmarks/loop-vs-graph.md](docs/benchmarks/loop-vs-graph.md).
 
 - **Rule routing** (`AGENTOPS_AGENT_RULE_ROUTING`): plain lookups skip the tool-selection model
   call; questions that ask for a calculation get a calculator nudge instead.

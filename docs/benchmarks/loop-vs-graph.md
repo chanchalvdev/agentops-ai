@@ -38,8 +38,9 @@ runs on different evenings and this machine's latency varies with memory pressur
 
 - **The loop needs a correction on almost every answer.** In 31 of 33 runs, qwen3:8b answered
   in plain prose after searching instead of calling `final_answer`. The loop refuses prose by
-  design (an answer is either a tool call or a validated final answer, never parsed text), sends
-  one correction, and the model then calls `final_answer` correctly. The strict
+  design (an answer is either a tool call or a validated final answer, never parsed text), asks
+  again, and the model then calls `final_answer` correctly: 23 runs needed one correction, 8
+  needed two. The strict
   `structured_output` evaluator ("valid on the first try") fails all of those runs. The graph
   never has this problem: each of its steps uses JSON-schema-constrained decoding, so the
   model cannot produce anything but the schema.

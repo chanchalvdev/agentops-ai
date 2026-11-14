@@ -19,6 +19,11 @@ step() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 post() { curl -sS --fail-with-body "${H[@]}" -H 'content-type: application/json' "$URL$1" -d "$2"; }
 get() { curl -sS --fail-with-body "${H[@]}" "$URL$1"; }
+FAILED=0
+check() {  # check "<what>" <actual> <expected>
+  if [[ "$2" == "$3" ]]; then printf '  \033[32mok\033[0m   %s\n' "$1"
+  else printf '  \033[31mFAIL\033[0m %s: got %s, expected %s\n' "$1" "$2" "$3"; FAILED=1; fi
+}
 
 step "1. Health and readiness (database, Ollama, installed models)"
 curl -sS "$URL/ready" | json 'd'
@@ -40,6 +45,8 @@ step "3. Grounded question through the LangGraph workflow (verified, cited)"
 run=$(post /api/v1/agent/run '{"question": "What is the RPO in the latest payments architecture, in seconds?"}')
 echo "$run" | json "f'  [{d[\"status\"]}] {d[\"answer\"]}\n  verification={d[\"verification\"]} model_calls={d[\"model_calls\"]} tool_calls={d[\"tool_calls\"]} time={d[\"total_ms\"]/1000:.1f}s'"
 exec_id=$(echo "$run" | json 'd["execution_id"]')
+check "answered" "$(echo "$run" | json 'd["status"]')" answered
+check "answer cites a source" "$(echo "$run" | json 'bool(d["citations"] or d["tool_references"])')" True
 
 step "4. Open the first citation's source passage"
 cite=$(echo "$run" | json 'd["citations"][0]["document_id"] + "/chunks/" + d["citations"][0]["chunk_id"] if d["citations"] else ""')
@@ -64,6 +71,8 @@ else
     step "7. Approve: the run resumes from its Postgres checkpoint and performs the write"
     post "/api/v1/approvals/$approval/approve" '{"reason": "demo"}' | json "f'  [{d[\"status\"]}] {d[\"answer\"]}'"
     get "/api/v1/workspace/file?path=notes/demo.md" | json "'  notes/demo.md: ' + d['content'].strip()"
+    check "file written after approval" \
+      "$(get "/api/v1/workspace/file?path=notes/demo.md" | json "'written by the AgentOps demo' in d['content']")" True
   else
     echo "  Nothing is written until a human decides. Approve or reject it in the UI (Approvals),"
     echo "  or: curl -X POST -H 'X-API-Key: $KEY' $URL/api/v1/approvals/$approval/approve"
@@ -71,16 +80,18 @@ else
 fi
 
 step "8. The sandbox refuses what is not allowed (no shell, path jail)"
-for line in 'rm -rf calc' 'cat ../../.env' 'ls | wc -l'; do
+for pair in 'rm -rf calc=command_not_allowed' 'cat ../../.env=workspace_access_denied' 'ls | wc -l=invalid_request'; do
+  line=${pair%=*}
   out=$(curl -sS "${H[@]}" -H 'content-type: application/json' "$URL/api/v1/workspace/exec" -d "{\"line\": \"$line\"}")
-  echo "  \$ $line  ->  $(echo "$out" | json 'd.get("error", {}).get("code") or "exit " + str(d.get("exit_code"))')"
+  check "\$ $line refused" "$(echo "$out" | json 'd.get("error", {}).get("code") or "exit " + str(d.get("exit_code"))')" "${pair##*=}"
 done
 
 step "9. Tenant isolation: tenant B cannot read tenant A's execution"
 code=$(curl -sS -o /dev/null -w '%{http_code}' -H 'X-API-Key: dev-key-tenant-b' "$URL/api/v1/executions/$exec_id")
-echo "  GET /executions/$exec_id as tenant_b -> HTTP $code"
+check "GET /executions/<tenant A run> as tenant_b" "$code" 404
 
 step "10. Drift check (operator): compares current state with the committed baselines"
 post /api/v1/monitoring/check '{}' | json "f'  status: {d[\"report\"][\"status\"]}  alerts: {len(d[\"alerts\"])}\n' + '\n'.join(f'  {s[\"category\"]:<12}{s[\"metric\"]:<30}{s[\"status\"]}' for s in d['report']['signals'] if s['status'] != 'ok')"
 
 step "Done. Open the web UI (cd web && npm run dev) to see the same runs, traces, and approvals."
+if [[ "$FAILED" != 0 ]]; then echo "Some checks failed (see FAIL above)."; exit 1; fi

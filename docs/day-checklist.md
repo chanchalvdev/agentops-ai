@@ -241,7 +241,7 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [ ] Benchmark latency is sensitive to machine state (swap reached 9 GB with another project's containers running); token and call counts are the machine-independent signal
 
 ## Day 4 — original plan (Sat 24 Oct)
-## Day 5 — Web UI + end-to-end demo (branch `day-5-ui-demo`, uncommitted)
+## Day 5 — Web UI + end-to-end demo (done Sat 14 Nov, branch `day-5-ui-demo`)
 
 ### API for the UI (M12)
 - [x] `GET /api/v1/executions` (newest first, `limit`, `status`; tenant-scoped) for the Executions screen
