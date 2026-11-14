@@ -154,6 +154,20 @@ async def run_agent_stream(
     )
 
 
+@router.get(
+    "/executions",
+    response_model=list[ExecutionOut],
+    summary="The caller's most recent executions, newest first",
+)
+async def list_executions(
+    services: ServicesDep,
+    principal: PrincipalDep,
+    limit: int = Query(default=50, ge=1, le=200),
+    status: str | None = Query(default=None, max_length=32),
+) -> Any:
+    return await services.executions.recent(principal.tenant_id, limit, status)
+
+
 @router.get("/executions/{execution_id}", response_model=ExecutionOut)
 async def get_execution(
     execution_id: uuid.UUID, services: ServicesDep, principal: PrincipalDep

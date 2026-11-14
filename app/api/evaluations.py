@@ -40,6 +40,7 @@ class EvaluationRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    requested_by: str
     status: str
     mode: str
     total_cases: int
@@ -90,12 +91,14 @@ async def run_evaluation(
 async def list_runs(
     services: ServicesDep, principal: AdminDep, limit: int = Query(default=20, ge=1, le=100)
 ) -> Any:
-    return await EvaluationStore(services.sessions).list_runs(principal.tenant_id, limit)
+    return await EvaluationStore(services.sessions).list_runs(
+        None, limit
+    )  # operator-only route: every run
 
 
 @router.get("/runs/{run_id}", response_model=RunReport, summary="Run with per-case results")
 async def get_run(run_id: uuid.UUID, services: ServicesDep, principal: AdminDep) -> RunReport:
-    return await EvaluationStore(services.sessions).report(principal.tenant_id, run_id)
+    return await EvaluationStore(services.sessions).report(None, run_id)
 
 
 @router.get("/compare", response_model=Comparison, summary="Compare two runs; lists breaches")
@@ -105,7 +108,7 @@ async def compare_runs(
     store = EvaluationStore(services.sessions)
     thresholds = services.settings.eval_datasets_dir / "eval_thresholds.json"
     return compare(
-        await store.report(principal.tenant_id, base),
-        await store.report(principal.tenant_id, head),
+        await store.report(None, base),
+        await store.report(None, head),
         load_thresholds(thresholds if thresholds.is_file() else None),
     )

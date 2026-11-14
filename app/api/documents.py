@@ -117,6 +117,44 @@ async def get_document(
     )
 
 
+class ChunkOut(BaseModel):
+    id: uuid.UUID
+    document_id: uuid.UUID
+    filename: str
+    document_version: int
+    chunk_index: int
+    section: str | None
+    page_start: int | None
+    page_end: int | None
+    char_start: int
+    char_end: int
+    text: str
+
+
+@router.get(
+    "/{document_id}/chunks/{chunk_id}",
+    response_model=ChunkOut,
+    summary="One source passage (what a citation points at)",
+)
+async def get_chunk(
+    document_id: uuid.UUID, chunk_id: uuid.UUID, services: ServicesDep, principal: PrincipalDep
+) -> ChunkOut:
+    doc, chunk = await services.ingestion.chunk(principal.tenant_id, document_id, chunk_id)
+    return ChunkOut(
+        id=chunk.id,
+        document_id=doc.id,
+        filename=doc.filename,
+        document_version=doc.version,
+        chunk_index=chunk.chunk_index,
+        section=chunk.section,
+        page_start=chunk.page_start,
+        page_end=chunk.page_end,
+        char_start=chunk.char_start,
+        char_end=chunk.char_end,
+        text=chunk.text,
+    )
+
+
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(
     document_id: uuid.UUID, services: ServicesDep, principal: PrincipalDep

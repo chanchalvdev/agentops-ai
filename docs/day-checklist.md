@@ -190,7 +190,7 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [ ] Judge sees 300-char snippets only and cannot see workspace state (5/5 on the false `ws-edit-approved` report) → advisory only, Day 4
 - [ ] `datasets/corpus` now includes the prompt-injection doc, so `agentops ingest datasets/corpus` loads it for tenant_a too (intended as an adversarial fixture)
 
-## Day 4 — Optimization, drift, hardening (done Fri 13 Nov, branch `day-4-optimization-drift-hardening`, uncommitted)
+## Day 4 — Optimization, drift, hardening (done Fri 13 Nov, branch `day-4-optimization-drift-hardening`)
 
 ### Optimization (M9)
 - [x] Graph switches resolved once into `AgentTuning` (all default to Day 3 behaviour): query rewrite, search top_k, evidence cap, rule routing, small-model drafts
@@ -241,4 +241,33 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [ ] Benchmark latency is sensitive to machine state (swap reached 9 GB with another project's containers running); token and call counts are the machine-independent signal
 
 ## Day 4 — original plan (Sat 24 Oct)
-## Day 5 — UI + end-to-end demo (Sun 25 Oct)
+## Day 5 — Web UI + end-to-end demo (branch `day-5-ui-demo`, uncommitted)
+
+### API for the UI (M12)
+- [x] `GET /api/v1/executions` (newest first, `limit`, `status`; tenant-scoped) for the Executions screen
+- [x] `GET /api/v1/documents/{id}/chunks/{chunk_id}`: open a citation's source passage; 404 across tenants (same as missing)
+- [x] Operators see every evaluation run (runs started from the CLI are recorded as `cli` and were invisible in the API); `requested_by` in the run list
+- [x] 3 integration tests; 373 tests pass, ruff + mypy strict clean
+
+### Web UI (M13)
+- [x] React 18 + TypeScript (strict) + Vite 5 + Tailwind 3 in `web/`, no other runtime dependencies; Vite proxies `/api` (incl. WebSocket), so no CORS change
+- [x] Chat: SSE over POST (fetch + incremental parser), live step timeline, answer with clickable `[S#]` citations (source chunk drawer) and `[T#]` tool results, graph/loop mode, link to Approvals when paused
+- [x] Documents: upload with metadata, polling while indexing, reindex, delete
+- [x] Workspace: lazy file tree, viewer/editor, terminal over the sandbox WebSocket (refusals in red), audit log
+- [x] Approvals: diff preview against the current file (new file, edit, or "the tool will refuse"), approve/reject with reason, resumed answer
+- [x] Executions: list + ledger timeline with latency bars, tokens, cache hits
+- [x] Evaluations & Monitoring: runs, category/evaluator scores, failing cases, compare (regression gate), drift signals, alerts, run check now; non-operators get an explanation, not an error page
+- [x] Unit tests (SSE parser, line diff, citation splitting), strict type-check, production build (193 KB JS, 60 KB gzip); CI `web` job
+- [x] Driven end to end in Chrome against the live API and models: cited answer + source drawer; workspace edit rejected after the diff exposed a duplicated line; new file approved and written; terminal refusals (allowlist, path jail, no shell); run comparison 87% → 95%; drift check; tenant_b sees 403s
+- [x] Bugs found that way and fixed: terminal effect crashed React ("destroy is not a function") → explicit effects + a per-screen error boundary; dev double-mount leaked a "closed" line → handlers detached on cleanup; token total read a Python-only property; operational stats read the wrong (nested) keys; operator run list empty (above)
+
+### Demo + docs (M14)
+- [x] `scripts/demo.sh`: the full flow through the public API (corpus, cited answer, source passage, trace, approval, sandbox refusals, tenant isolation, drift check)
+- [x] `APPROVE=1 scripts/demo.sh` run live (`reports/demo-run.log`): cited 300 s answer, verified; source passage; 17-event trace; write approved and on disk; 3 sandbox refusals; tenant_b gets 404; drift check. Found that upload returns `{document, duplicate}` (script and UI type fixed; the UI now says "already uploaded")
+- [x] `docs/demo.md`: the UI walkthrough; README: Web UI section, new endpoints, troubleshooting (port 8000 taken, Ollama killed under memory pressure), known limitations
+- [x] Loop-vs-graph comparison measured at last (Day 3 deferral; [docs/benchmarks/loop-vs-graph.md](benchmarks/loop-vs-graph.md)): on the same 33 cases the loop passes 1/33 strictly, 24/33 without `structured_output` (graph 29/33 baseline, 32/33 optimized). qwen3:8b answers in prose before `final_answer` in 31/33 loop runs; the loop uses 44% more tokens than the graph baseline
+
+### Deferred / known limitations
+- [ ] An evaluation run killed with its process (machine sleep) stays `running`; only a graceful cancel marks it failed
+- [ ] Drift check's default retrieval head is the latest report, which can be an experiment probe
+- [ ] UI: API key in local storage is the only credential; terminal is one command at a time; no mobile layout

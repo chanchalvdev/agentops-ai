@@ -88,6 +88,19 @@ class ExecutionStore:
             raise NotFoundError("Execution not found")
         return row
 
+    async def recent(
+        self, tenant_id: str, limit: int = 50, status: str | None = None
+    ) -> list[AgentExecution]:
+        """The tenant's most recent executions, newest first."""
+        stmt = select(AgentExecution).where(AgentExecution.tenant_id == tenant_id)
+        if status is not None:
+            stmt = stmt.where(AgentExecution.status == status)
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                stmt.order_by(AgentExecution.created_at.desc()).limit(limit)
+            )
+            return list(rows)
+
     async def events(self, tenant_id: str, execution_id: uuid.UUID) -> list[ExecutionEvent]:
         await self.get(tenant_id, execution_id)  # ownership check
         async with self._sessions() as session:

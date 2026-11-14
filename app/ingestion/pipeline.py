@@ -263,6 +263,28 @@ class IngestionService:
             raise NotFoundError("Document not found")
         return doc
 
+    async def chunk(
+        self, tenant_id: str, document_id: uuid.UUID, chunk_id: uuid.UUID
+    ) -> tuple[Document, DocumentChunk]:
+        """One source passage, e.g. to open a citation. Both the document and the chunk must
+        belong to the tenant; anything else is the same 404 as a missing chunk."""
+        async with self._sessions() as session:
+            row = (
+                await session.execute(
+                    select(Document, DocumentChunk)
+                    .join(DocumentChunk, DocumentChunk.document_id == Document.id)
+                    .where(
+                        Document.id == document_id,
+                        Document.tenant_id == tenant_id,
+                        DocumentChunk.id == chunk_id,
+                        DocumentChunk.tenant_id == tenant_id,
+                    )
+                )
+            ).one_or_none()
+        if row is None:
+            raise NotFoundError("Chunk not found")
+        return row[0], row[1]
+
     async def list(
         self, tenant_id: str, *, limit: int, offset: int, status: DocumentStatus | None = None
     ) -> tuple[list[Document], int]:

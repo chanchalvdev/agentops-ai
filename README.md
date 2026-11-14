@@ -7,7 +7,7 @@ answer verification and human approval, sandboxed workspace tools (files + allow
 writes gated by a human), traces exported to optional Langfuse/LangSmith, and an evaluation
 framework with a 38-case golden dataset and a CI-style regression gate, measured cost/latency
 optimizations behind a quality gate, drift monitoring with persisted alerts, per-tenant rate
-limiting, and a Docker image. In progress: the web UI.
+limiting, a Docker image, and a React web UI that drives all of it through the public API.
 
 - Product spec: [product.txt](product.txt) · Architecture: [docs/architecture/system-design.png](docs/architecture/system-design.png)
 - Animated end-to-end flows: [docs/architecture/system-flow.gif](docs/architecture/system-flow.gif)
@@ -49,7 +49,12 @@ uv run agentops drift check                      # quality/retrieval/data/operat
 uv run agentops metrics --hours 24               # latency, errors, retries, tokens, cost
 
 uv run uvicorn --factory app.main:create_app --port 8000   # API + docs at http://localhost:8000/docs
+
+cd web && npm install && npm run dev             # web UI at http://localhost:5173 (key: dev-key-tenant-a)
+scripts/demo.sh                                  # the end-to-end demo through the API (APPROVE=1 to approve)
 ```
+
+The full walkthrough (UI and API) is in [docs/demo.md](docs/demo.md).
 
 In development, two API keys exist out of the box: `dev-key-tenant-a` and `dev-key-tenant-b`.
 Set `AGENTOPS_API_KEYS` for anything else (see [.env.example](.env.example)); `AGENTOPS_ENV=prod`
@@ -72,6 +77,7 @@ curl -N -H "$H" -H 'content-type: application/json' localhost:8000/api/v1/agent/
 | GET | `/health`, `/ready` | Liveness; readiness checks DB, Ollama, and that configured models are installed |
 | POST | `/api/v1/documents` | Upload TXT/MD/PDF (+ optional flat JSON `metadata`). 202 + background indexing; 200 if identical content exists |
 | GET | `/api/v1/documents`, `/api/v1/documents/{id}` | List (paginated, `status` filter) / fetch |
+| GET | `/api/v1/documents/{id}/chunks/{chunk_id}` | One source passage: what a citation points at (404 across tenants) |
 | DELETE | `/api/v1/documents/{id}` | Delete document and its chunks |
 | POST | `/api/v1/documents/{id}/reindex` | Re-chunk and re-embed with the current configuration |
 | POST | `/api/v1/retrieval/search` | `vector` / `keyword` / `hybrid` search with per-result ranks and timing |
@@ -80,6 +86,7 @@ curl -N -H "$H" -H 'content-type: application/json' localhost:8000/api/v1/agent/
 | GET | `/api/v1/models` | Model per role and whether it is installed |
 | POST | `/api/v1/agent/run` | Run the agent (`mode`: `graph` default, or `loop`); `limits` may only tighten server defaults |
 | POST | `/api/v1/agent/run/stream` | Same, as Server-Sent Events: `start`, `step`, `model_call`, `tool_call`, `correction`, `approval`, `citation`, `final` |
+| GET | `/api/v1/executions?limit=&status=` | The caller's most recent executions, newest first |
 | GET | `/api/v1/executions/{id}` | Stored execution: status, answer, citations, counters, tokens, limits |
 | GET | `/api/v1/executions/{id}/trace` | The execution ledger: every model call, tool call, rejection, and decision |
 | GET | `/api/v1/approvals?status=pending` | Tool calls paused for a human decision |
@@ -256,6 +263,32 @@ which is why answer coverage exists.
   must listen beyond loopback for that (`OLLAMA_HOST=0.0.0.0:11434 ollama serve`); otherwise
   `/ready` reports `ollama: unreachable` while the database check passes.
 
+## Web UI
+
+React + TypeScript + Vite + Tailwind in [web/](web/), with no other runtime dependencies. It is
+a pure client of the public API: every rule (permissions, approvals, limits, tenant isolation)
+is enforced by the server, and the only credential the UI holds is the user's API key (browser
+local storage). In development and `npm run preview`, Vite forwards `/api` (including the
+terminal WebSocket) to the API (`AGENTOPS_API_URL`, default `http://localhost:8000`), so the
+backend needs no CORS configuration.
+
+| Screen | What it shows |
+|---|---|
+| Chat | Streams the run over SSE: each step, model call, tool call, and approval as it happens; the answer with clickable `[S1]`/`[T1]` citations that open the source passage or tool result; graph or loop mode |
+| Documents | Upload (with optional metadata), status while indexing, reindex, delete |
+| Workspace | File tree, viewer/editor (your own writes), a terminal over the same sandboxed executor (refusals shown in red), and the audit log |
+| Approvals | Pending writes and commands with a diff preview against the current file; approve or reject with a reason; the resumed run's answer |
+| Executions | Recent runs and a per-run timeline from the ledger: steps, model and tool calls, latency bars, tokens, cache hits |
+| Evaluations & Monitoring | Operator only: runs, per-category and per-evaluator scores, failing cases, baseline comparison with the regression gate, drift status with signals, alerts, and "run check now" |
+
+```bash
+cd web
+npm run dev          # http://localhost:5173
+npm test             # unit tests (SSE parser, diff, citation parsing)
+npm run typecheck && npm run build
+AGENTOPS_API_URL=http://localhost:8010 npm run dev   # API on another port
+```
+
 ## Development
 
 ```bash
@@ -284,6 +317,10 @@ reported as `0` with `pricing_source: "local"`; hosted models without a configur
   `AGENTOPS_DATABASE_URL` (and for tests `AGENTOPS_TEST_ADMIN_DSN` / `AGENTOPS_TEST_DATABASE_URL`) at 5435.
 - Agent runs much slower than the timings above → check memory (`sysctl vm.swapusage`,
   `ollama ps`). On 16 GB, other containers plus qwen3:8b at an 8k context cause heavy swapping.
+- Port 8000 in use (another project's server) → run the API with `--port 8010` and start the UI
+  with `AGENTOPS_API_URL=http://localhost:8010 npm run dev`; for the demo, `AGENTOPS_URL=http://localhost:8010`.
+- A run fails with `provider_unavailable` in the middle (`ollama ps` shows nothing, the Ollama
+  process is gone) → under heavy memory pressure macOS can kill Ollama; restart `ollama serve`.
 - Every model call fails with `provider_error` but `/api/tags` answers → another Ollama (e.g. a
   container from another project) owns port 11434 without these models. Run a second one,
   `OLLAMA_HOST=127.0.0.1:11435 ollama serve`, and set `AGENTOPS_OLLAMA_BASE_URL=http://localhost:11435`.
@@ -296,6 +333,13 @@ reported as `0` with `pricing_source: "local"`; hosted models without a configur
   the model, which must then report `insufficient_evidence` itself.
 - Scanned PDFs (no text layer) are rejected; there is no OCR.
 - Changing the embedding model's dimension needs a migration and a full reindex.
+- Web UI: no login of its own (the API key is the credential, kept in browser local storage);
+  one terminal command at a time (not a PTY); the approval preview diffs against the file's
+  first 20 KB when it is larger; no mobile layout.
+- An evaluation run whose process is killed (e.g. the machine sleeps) stays `running` in the
+  database; only a graceful cancel marks it failed.
+- The drift check's default "current" retrieval report is simply the latest one, which can be an
+  experiment probe (e.g. `degraded-chunking`); pass the reports explicitly for a clean comparison.
 - Rate limits and caches are in-process: with several API replicas each has its own buckets and
   caches (Redis would be the next step). The workspace WebSocket terminal is not rate limited.
 - Indexing is fail-closed: a document is unsearchable while reindexing, a failed reindex drops its

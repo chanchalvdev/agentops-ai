@@ -109,23 +109,24 @@ class EvaluationStore:
                 )
             )
 
-    async def list_runs(self, requested_by: str, limit: int = 50) -> list[EvaluationRun]:
+    async def list_runs(self, requested_by: str | None, limit: int = 50) -> list[EvaluationRun]:
+        """Runs started by `requested_by`, or every run when None (operator view: runs started
+        from the CLI are recorded as "cli" and must be visible to operators too)."""
+        stmt = select(EvaluationRun)
+        if requested_by is not None:
+            stmt = stmt.where(EvaluationRun.requested_by == requested_by)
         async with self._sessions() as session:
             rows = await session.scalars(
-                select(EvaluationRun)
-                .where(EvaluationRun.requested_by == requested_by)
-                .order_by(EvaluationRun.started_at.desc())
-                .limit(limit)
+                stmt.order_by(EvaluationRun.started_at.desc()).limit(limit)
             )
             return list(rows)
 
-    async def report(self, requested_by: str, run_id: uuid.UUID) -> RunReport:
+    async def report(self, requested_by: str | None, run_id: uuid.UUID) -> RunReport:
+        stmt = select(EvaluationRun).where(EvaluationRun.id == run_id)
+        if requested_by is not None:
+            stmt = stmt.where(EvaluationRun.requested_by == requested_by)
         async with self._sessions() as session:
-            run = await session.scalar(
-                select(EvaluationRun).where(
-                    EvaluationRun.id == run_id, EvaluationRun.requested_by == requested_by
-                )
-            )
+            run = await session.scalar(stmt)
             if run is None:
                 raise NotFoundError("Evaluation run not found")
             dataset = await session.get(EvaluationDataset, run.dataset_id)
