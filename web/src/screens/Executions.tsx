@@ -12,84 +12,86 @@ function Ledger({ events }: { events: TraceEvent[] }) {
   const [open, setOpen] = useState<number | null>(null);
   const max = Math.max(1, ...events.map((e) => e.latency_ms ?? 0));
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="border-b border-rule text-left text-xs text-ink-2">
-          <th className="w-10 py-2.5 pr-2 text-right font-semibold">#</th>
-          <th className="px-3 font-semibold">Kind</th>
-          <th className="px-3 font-semibold">Name</th>
-          <th className="px-3 font-semibold">Outcome</th>
-          <th className="w-[28%] px-3 font-semibold">Latency</th>
-          <th className="px-3 text-right font-semibold">Tokens</th>
-        </tr>
-      </thead>
-      <tbody>
-        {events.map((e) => {
-          const expanded = open === e.seq;
-          const bad = e.status === "error" || e.status === "rejected";
-          return (
-            <Fragment key={e.seq}>
-              <tr
-                className={cx("cursor-pointer border-b border-rule/70 hover:bg-wash/70", expanded && "bg-wash")}
-                onClick={() => setOpen(expanded ? null : e.seq)}
-              >
-                <td className="py-2 pr-2 text-right font-mono text-xs text-ink-3">{e.seq}</td>
-                <td className="whitespace-nowrap px-3 text-xs font-semibold text-ink-2">{label(e.kind)}</td>
-                <td className="px-3">
-                  <button
-                    className={cx("flex items-center gap-1 text-left font-mono text-xs", bad ? "text-seal" : "text-ink")}
-                    aria-expanded={expanded}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      setOpen(expanded ? null : e.seq);
-                    }}
-                  >
-                    {expanded ? <ChevronDown className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
-                    {e.name}
-                    {e.kind === "model_call" && e.data?.model ? <span className="text-ink-2"> · {String(e.data.model)}</span> : null}
-                    {e.data?.cache === "hit" && <span className="ml-1 text-stamp">cache hit</span>}
-                  </button>
-                </td>
-                <td className="px-3">
-                  {e.status === "ok" ? (
-                    <span className="text-xs text-ink-2">ok</span>
-                  ) : (
-                    <Status value={e.error_code ?? e.status} tone={e.status === "pending" ? "pending" : "critical"} />
-                  )}
-                </td>
-                <td className="px-3">
-                  {e.latency_ms ? (
-                    <div className="flex items-center gap-2">
-                      <div className="h-1.5 flex-1 bg-wash">
-                        <div
-                          className={cx("h-1.5", e.kind === "model_call" ? "bg-stamp" : "bg-ink-3")}
-                          style={{ width: `${Math.max(2, ((e.latency_ms ?? 0) / max) * 100)}%` }}
-                        />
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[520px] text-sm">
+        <thead>
+          <tr className="border-b border-rule text-left text-xs text-ink-2">
+            <th className="w-10 py-2.5 pr-2 text-right font-semibold">#</th>
+            <th className="px-3 font-semibold">Kind</th>
+            <th className="px-3 font-semibold">Name</th>
+            <th className="px-3 font-semibold">Outcome</th>
+            <th className="w-[28%] px-3 font-semibold">Latency</th>
+            <th className="px-3 text-right font-semibold">Tokens</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((e) => {
+            const expanded = open === e.seq;
+            const bad = e.status === "error" || e.status === "rejected";
+            return (
+              <Fragment key={e.seq}>
+                <tr
+                  className={cx("cursor-pointer border-b border-rule/70 hover:bg-wash/70", expanded && "bg-wash")}
+                  onClick={() => setOpen(expanded ? null : e.seq)}
+                >
+                  <td className="py-2 pr-2 text-right font-mono text-xs text-ink-3">{e.seq}</td>
+                  <td className="whitespace-nowrap px-3 text-xs font-semibold text-ink-2">{label(e.kind)}</td>
+                  <td className="px-3">
+                    <button
+                      className={cx("flex items-center gap-1 text-left font-mono text-xs", bad ? "text-seal" : "text-ink")}
+                      aria-expanded={expanded}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        setOpen(expanded ? null : e.seq);
+                      }}
+                    >
+                      {expanded ? <ChevronDown className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
+                      {e.name}
+                      {e.kind === "model_call" && e.data?.model ? <span className="text-ink-2"> · {String(e.data.model)}</span> : null}
+                      {e.data?.cache === "hit" && <span className="ml-1 text-stamp">cache hit</span>}
+                    </button>
+                  </td>
+                  <td className="px-3">
+                    {e.status === "ok" ? (
+                      <span className="text-xs text-ink-2">ok</span>
+                    ) : (
+                      <Status value={e.error_code ?? e.status} tone={e.status === "pending" ? "pending" : "critical"} />
+                    )}
+                  </td>
+                  <td className="px-3">
+                    {e.latency_ms ? (
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 flex-1 bg-wash">
+                          <div
+                            className={cx("h-1.5", e.kind === "model_call" ? "bg-stamp" : "bg-ink-3")}
+                            style={{ width: `${Math.max(2, ((e.latency_ms ?? 0) / max) * 100)}%` }}
+                          />
+                        </div>
+                        <span className="w-14 text-right font-mono text-xs">{ms(e.latency_ms)}</span>
                       </div>
-                      <span className="w-14 text-right font-mono text-xs">{ms(e.latency_ms)}</span>
-                    </div>
-                  ) : (
-                    <span className="text-xs text-ink-3">–</span>
-                  )}
-                </td>
-                <td className="px-3 text-right font-mono text-xs">
-                  {e.input_tokens != null ? `${e.input_tokens}+${e.output_tokens ?? 0}` : ""}
-                </td>
-              </tr>
-              {expanded && (
-                <tr className="bg-wash">
-                  <td />
-                  <td colSpan={5} className="px-3 pb-3">
-                    {e.message && <p className="mb-2 text-sm">{e.message}</p>}
-                    <Code>{JSON.stringify(e.data, null, 2)}</Code>
+                    ) : (
+                      <span className="text-xs text-ink-3">–</span>
+                    )}
+                  </td>
+                  <td className="px-3 text-right font-mono text-xs">
+                    {e.input_tokens != null ? `${e.input_tokens}+${e.output_tokens ?? 0}` : ""}
                   </td>
                 </tr>
-              )}
-            </Fragment>
-          );
-        })}
-      </tbody>
-    </table>
+                {expanded && (
+                  <tr className="bg-wash">
+                    <td />
+                    <td colSpan={5} className="px-3 pb-3">
+                      {e.message && <p className="mb-2 text-sm">{e.message}</p>}
+                      <Code>{JSON.stringify(e.data, null, 2)}</Code>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -225,7 +227,7 @@ export default function Executions({ selected }: { selected?: string }) {
           ))}
         </ol>
       </aside>
-      <div className="px-8 py-8">
+      <div className="px-4 sm:px-8 py-6 sm:py-8">
         {selected ? (
           <Detail id={selected} />
         ) : (

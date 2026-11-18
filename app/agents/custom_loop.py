@@ -77,6 +77,7 @@ class AgentLoop:
 
     async def run(self, ctx: ExecutionContext, question: str) -> AgentRunResult:
         store = EvidenceStore()
+        ctx.evidence = store
         try:
             return await self._run(ctx, question, store)
         except AppError as exc:
@@ -116,7 +117,7 @@ class AgentLoop:
                 ctx,
                 "main",
                 LLMRequest(
-                    messages=bound_history(messages, self._max_context_chars),
+                    messages=bound_history(messages, self._max_context_chars, recap=store.recap),
                     tools=tools,
                     max_output_tokens=self._max_output_tokens,
                 ),

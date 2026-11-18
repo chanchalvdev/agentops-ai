@@ -4,16 +4,18 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.db.models import EvaluationCase, EvaluationDataset, EvaluationResult, EvaluationRun
 from app.evaluation.dataset import Dataset
 from app.evaluation.evaluators import EvaluatorResult
 from app.evaluation.report import CaseReport, DatasetInfo, RunReport
 from app.monitoring.cost import UsageSummary
+
+_RUN_LOCK_KEY = 0x6576616C  # "eval": one evaluation run at a time across processes
 
 
 class EvaluationStore:
@@ -61,7 +63,18 @@ class EvaluationStore:
     async def start_run(
         self, dataset_id: uuid.UUID, requested_by: str, mode: str, config: dict[str, Any]
     ) -> EvaluationRun:
+        """Create the run row, refusing while another run is in progress in ANY process (API,
+        CLI, a second replica): an advisory lock serialises the check-then-insert."""
         async with self._sessions() as session, session.begin():
+            await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _RUN_LOCK_KEY})
+            busy = await session.scalar(
+                select(EvaluationRun.id).where(EvaluationRun.status == "running").limit(1)
+            )
+            if busy is not None:
+                raise ConflictError(
+                    f"An evaluation run is already in progress ({busy}); a run whose process "
+                    "died is released once it is older than AGENTOPS_EVAL_STALE_AFTER_S"
+                )
             row = EvaluationRun(
                 id=uuid.uuid4(),
                 dataset_id=dataset_id,

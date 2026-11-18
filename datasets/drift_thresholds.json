@@ -3,6 +3,7 @@
   "max_pass_rate_drop": 0.05,
   "max_category_drop": 0.25,
   "max_quality_score_drop": 0.1,
+  "max_newly_failing_cases": 0,
   "zero_tolerance_evaluators": [
     "unauthorized_tools",
     "workspace_effects"

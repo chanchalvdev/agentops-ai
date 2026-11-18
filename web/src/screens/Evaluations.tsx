@@ -20,28 +20,30 @@ function RateBar({ rate }: { rate: number | null }) {
 
 function ScoreTable({ title, rows }: { title: string; rows: [string, { passed: number; total: number; rate: number | null }][] }) {
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="border-b border-rule text-left text-xs text-ink-2">
-          <th className="py-2 pr-3 font-semibold">{title}</th>
-          <th className="px-3 text-right font-semibold">Passed</th>
-          <th className="w-[45%] pl-3 font-semibold">Rate</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-rule/70">
-        {rows.map(([name, v]) => (
-          <tr key={name}>
-            <td className="py-2 pr-3 font-mono text-xs">{name}</td>
-            <td className="px-3 text-right font-mono text-xs">
-              {v.passed}/{v.total}
-            </td>
-            <td className="pl-3">
-              <RateBar rate={v.rate} />
-            </td>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[520px] text-sm">
+        <thead>
+          <tr className="border-b border-rule text-left text-xs text-ink-2">
+            <th className="py-2 pr-3 font-semibold">{title}</th>
+            <th className="px-3 text-right font-semibold">Passed</th>
+            <th className="w-[45%] pl-3 font-semibold">Rate</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody className="divide-y divide-rule/70">
+          {rows.map(([name, v]) => (
+            <tr key={name}>
+              <td className="py-2 pr-3 font-mono text-xs">{name}</td>
+              <td className="px-3 text-right font-mono text-xs">
+                {v.passed}/{v.total}
+              </td>
+              <td className="pl-3">
+                <RateBar rate={v.rate} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -204,46 +206,48 @@ function Signals({ signals }: { signals: Signal[] }) {
   const order = { drift: 0, insufficient_data: 1, ok: 2 } as const;
   const byFamily = FAMILY_ORDER.map((f) => [f, signals.filter((s) => s.category === f).sort((a, b) => order[a.status] - order[b.status])] as const);
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="border-b border-rule text-left text-xs text-ink-2">
-          <th className="py-2 pr-3 font-semibold">Signal</th>
-          <th className="px-3 font-semibold">Status</th>
-          <th className="px-3 text-right font-semibold">Baseline</th>
-          <th className="px-3 text-right font-semibold">Now</th>
-          <th className="pl-3 font-semibold">What changed</th>
-        </tr>
-      </thead>
-      {byFamily.map(([family, rows]) =>
-        rows.length ? (
-          <tbody key={family}>
-            <tr>
-              <th colSpan={5} scope="rowgroup" className="pb-1 pt-5 text-left text-md font-bold capitalize">
-                {family}
-              </th>
-            </tr>
-            {rows.map((s) => (
-              <tr key={`${s.category}.${s.metric}`} className={cx("border-t border-rule/70 align-top", s.status === "drift" && "bg-seal-soft/60")}>
-                <td className="py-2 pr-3 font-mono text-xs">{s.metric}</td>
-                <td className="whitespace-nowrap px-3 py-2">
-                  <Status
-                    value={s.status === "drift" ? `${s.evidence ?? ""} drift`.trim() : s.status}
-                    tone={s.status === "drift" ? (s.evidence === "measured" ? "critical" : "pending") : undefined}
-                  />
-                </td>
-                <td className="px-3 py-2 text-right font-mono text-xs">{s.baseline ?? "–"}</td>
-                <td className="px-3 py-2 text-right font-mono text-xs">{s.current ?? "–"}</td>
-                <td className={cx("max-w-[460px] py-2 pl-3 text-xs", s.status === "drift" ? "text-ink" : "text-ink-2")}>
-                  <span className="line-clamp-3 break-words" title={s.message}>
-                    {s.message}
-                  </span>
-                </td>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[520px] text-sm">
+        <thead>
+          <tr className="border-b border-rule text-left text-xs text-ink-2">
+            <th className="py-2 pr-3 font-semibold">Signal</th>
+            <th className="px-3 font-semibold">Status</th>
+            <th className="px-3 text-right font-semibold">Baseline</th>
+            <th className="px-3 text-right font-semibold">Now</th>
+            <th className="pl-3 font-semibold">What changed</th>
+          </tr>
+        </thead>
+        {byFamily.map(([family, rows]) =>
+          rows.length ? (
+            <tbody key={family}>
+              <tr>
+                <th colSpan={5} scope="rowgroup" className="pb-1 pt-5 text-left text-md font-bold capitalize">
+                  {family}
+                </th>
               </tr>
-            ))}
-          </tbody>
-        ) : null,
-      )}
-    </table>
+              {rows.map((s) => (
+                <tr key={`${s.category}.${s.metric}`} className={cx("border-t border-rule/70 align-top", s.status === "drift" && "bg-seal-soft/60")}>
+                  <td className="py-2 pr-3 font-mono text-xs">{s.metric}</td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <Status
+                      value={s.status === "drift" ? `${s.evidence ?? ""} drift`.trim() : s.status}
+                      tone={s.status === "drift" ? (s.evidence === "measured" ? "critical" : "pending") : undefined}
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs">{s.baseline ?? "–"}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs">{s.current ?? "–"}</td>
+                  <td className={cx("max-w-[460px] py-2 pl-3 text-xs", s.status === "drift" ? "text-ink" : "text-ink-2")}>
+                    <span className="line-clamp-3 break-words" title={s.message}>
+                      {s.message}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          ) : null,
+        )}
+      </table>
+    </div>
   );
 }
 
@@ -310,9 +314,9 @@ function Monitoring() {
         )}
       </Panel>
 
-      <Panel title="Alerts" meta={s ? `${s.open_alerts.length} on record` : undefined}>
+      <Panel title="Alerts" meta={s ? `${s.open_alerts.length} open` : undefined}>
         {s && s.open_alerts.length === 0 ? (
-          <Empty title="No alerts" />
+          <Empty title="No open alerts" />
         ) : (
           <ul className="divide-y divide-rule">
             {s?.open_alerts.map((a) => (
@@ -328,6 +332,22 @@ function Monitoring() {
                     <span className="ml-auto font-mono text-xs text-ink-2">{when(a.created_at)}</span>
                   </div>
                   <p className="mt-1 text-sm text-ink-2">{a.message}</p>
+                  <div className="mt-2">
+                  <Button
+                    size="sm"
+                    title="Mark as seen; it stays on record"
+                    onClick={async () => {
+                      try {
+                        await api.acknowledgeAlert(a.id);
+                        await summary.reload();
+                      } catch (e) {
+                        setError(e);
+                      }
+                    }}
+                  >
+                    Acknowledge
+                  </Button>
+                  </div>
                 </div>
               </li>
             ))}
@@ -348,7 +368,7 @@ export default function Evaluations({ selected }: { selected?: string }) {
     label: `${String(r.config.profile ?? r.mode)} · ${r.passed_cases}/${r.total_cases} · ${when(r.started_at)}`,
   }));
   return (
-    <div className="mx-auto max-w-[1400px] px-8 py-8">
+    <div className="mx-auto max-w-[1400px] px-4 sm:px-8 py-6 sm:py-8">
       <PageHead title="Evals & drift" sub="Measured quality: the golden set, the regression gate, and drift against committed baselines." />
       {forbidden ? (
         <div className="max-w-2xl border-1.5 border-ink bg-paper p-6">

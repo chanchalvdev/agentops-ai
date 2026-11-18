@@ -4,10 +4,12 @@ GET /api/v1/metrics is per tenant (any caller sees its own executions). The moni
 are system-wide (all tenants, evaluation history), so they are operator (admin) only.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel, Field
 
 from app.api.deps import AdminDep, PrincipalDep, ServicesDep, rate_limited
 from app.evaluation.retrieval_eval import list_retrieval_reports
@@ -92,6 +94,26 @@ async def alerts(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[AlertOut]:
     return await MonitoringService(services).alerts(limit=limit, status=status)
+
+
+class AcknowledgeRequest(BaseModel):
+    note: str | None = Field(default=None, max_length=1000)
+
+
+@router.post(
+    "/monitoring/alerts/{alert_id}/acknowledge",
+    response_model=AlertOut,
+    summary="Acknowledge an open alert (kept on record, removed from the open list)",
+)
+async def acknowledge_alert(
+    alert_id: uuid.UUID,
+    services: ServicesDep,
+    principal: AdminDep,
+    body: AcknowledgeRequest | None = None,
+) -> AlertOut:
+    return await MonitoringService(services).acknowledge(
+        alert_id, by=principal.tenant_id, note=body.note if body else None
+    )
 
 
 @router.post(

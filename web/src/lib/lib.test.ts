@@ -4,6 +4,14 @@ import { SseParser } from "./sse";
 import { splitCitations } from "./format";
 
 describe("SseParser", () => {
+  it("keeps the id field so a reconnect can send Last-Event-ID", () => {
+    const p = new SseParser();
+    expect(p.push('id: 7\nevent: step\ndata: {"seq":7}\n\nevent: start\ndata: {}\n\n')).toEqual([
+      { event: "step", data: '{"seq":7}', id: "7" },
+      { event: "start", data: "{}" },
+    ]);
+  });
+
   it("parses events across chunk boundaries and skips keep-alive comments", () => {
     const p = new SseParser();
     expect(p.push('event: start\ndata: {"a":')).toEqual([]);

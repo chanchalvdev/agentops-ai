@@ -6,8 +6,13 @@ use. Anything unlisted is rejected, because options are where "read-only" progra
 and escapes: `grep -f /etc/passwd`, `find -delete`, `find -exec`, `git diff --output=FILE`.
 Positional arguments are treated as paths and go through the same jail as the file tools.
 
-Not a sandbox: an approved `python -m pytest` runs workspace code with the server's OS
-privileges. Approval is the control for that; production would add a container or VM.
+Two backends run the planned argv (the allowlist and path jail apply to both):
+- "host": a child process with a scrubbed environment. Not an OS sandbox: an approved
+  `python -m pytest` runs workspace code with the server's privileges; approval is the control.
+- "docker": a throwaway container per command (DockerSandbox): no network, all capabilities
+  dropped, read-only root filesystem, CPU/memory/PID limits, non-root user, and only the
+  tenant's directory mounted. Workspace code then cannot reach the server, its files, its
+  credentials, or the network even when a human approved running it.
 """
 
 import asyncio
@@ -19,6 +24,7 @@ import shutil
 import signal
 import sys
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -255,6 +261,71 @@ def _kill(proc: asyncio.subprocess.Process) -> None:
         os.killpg(proc.pid, signal.SIGKILL)  # the whole group: pytest may spawn children
 
 
+@dataclass(frozen=True)
+class DockerSandbox:
+    """Runs each command in a fresh container. The docker CLI itself runs with the server's
+    environment (it needs its socket/config); the container gets only `env` below."""
+
+    image: str = "agentops-sandbox:1"
+    cpus: str = "1"
+    memory: str = "512m"
+    pids: int = 128
+    docker: str = "docker"
+
+    def argv(self, plan: CommandPlan, cwd: Path, name: str) -> list[str]:
+        program = plan.rule.run_as[0]
+        inner = ["python" if program == PYTHON else program, *plan.exec_argv[1:]]
+        env = {
+            # Paths inside the container (its private tmpfs), not on the host.
+            **scrubbed_env(Path("/tmp/home"), Path("/")),  # noqa: S108
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+        }
+        return [
+            self.docker,
+            "run",
+            "--rm",
+            "--name",
+            name,
+            "--network",
+            "none",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,size=64m",  # noqa: S108 - the container's own tmpfs
+            "--cpus",
+            self.cpus,
+            "--memory",
+            self.memory,
+            "--pids-limit",
+            str(self.pids),
+            "--user",
+            "10001:10001",
+            "--volume",
+            f"{cwd}:/workspace:rw",
+            "--workdir",
+            "/workspace",
+            *(arg for key, value in env.items() for arg in ("--env", f"{key}={value}")),
+            self.image,
+            *inner,
+        ]
+
+    async def remove(self, name: str) -> None:
+        """Killing the CLI does not stop the container: remove it explicitly."""
+        with contextlib.suppress(OSError):
+            proc = await asyncio.create_subprocess_exec(
+                self.docker,
+                "rm",
+                "-f",
+                name,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+
+
 async def run_streaming(
     plan: CommandPlan,
     *,
@@ -262,15 +333,18 @@ async def run_streaming(
     env: dict[str, str],
     timeout_s: float,
     max_output_bytes: int,
+    sandbox: DockerSandbox | None = None,
 ) -> AsyncIterator[str | ExecResult]:
     """Yield output text as it arrives, then one ExecResult. Closing the iterator early (client
-    gone, caller timeout) kills the process group."""
+    gone, caller timeout) kills the process group (and removes the container)."""
     started = time.perf_counter()
+    container = f"agentops-exec-{uuid.uuid4().hex[:12]}" if sandbox else None
+    argv = sandbox.argv(plan, cwd, container) if sandbox and container else plan.exec_argv
     try:
         proc = await asyncio.create_subprocess_exec(
-            *plan.exec_argv,
+            *argv,
             cwd=cwd,
-            env=env,
+            env={**os.environ} if sandbox else env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -302,6 +376,8 @@ async def run_streaming(
         if proc.returncode is None:
             _kill(proc)
             await proc.wait()
+            if sandbox and container:
+                await sandbox.remove(container)
     tail = decoder.decode(b"", final=True)
     if tail:
         parts.append(tail)

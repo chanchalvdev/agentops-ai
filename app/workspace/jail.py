@@ -14,6 +14,7 @@ the replace never happened and the write is redone. No crash window applies an e
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import os
@@ -40,6 +41,7 @@ from app.core.errors import (
 from app.workspace.audit import AuditEntry, AuditSink, AuditStatus, Operation
 from app.workspace.executor import (
     CommandPlan,
+    DockerSandbox,
     ExecResult,
     plan_command,
     run_streaming,
@@ -376,6 +378,21 @@ class Workspace:
             return None  # receipt written, replace never happened: do the write now
         return stored.model_copy(update={"replayed": True, "outcome": "already_applied"})
 
+    def _prune_receipts(self) -> None:
+        """Receipts only matter while a run can still be resumed or replayed. Delete those
+        older than receipt_ttl_s (default 7 days, well past the approval TTL), at most once an
+        hour per workspace."""
+        now = time.time()
+        if now - _LAST_PRUNE.get(self._receipts, 0.0) < 3600:
+            return
+        _LAST_PRUNE[self._receipts] = now
+        cutoff = now - self._m.receipt_ttl_s
+        with os.scandir(self._receipts) as entries:
+            for entry in entries:
+                with contextlib.suppress(OSError):
+                    if entry.is_file() and entry.stat().st_mtime < cutoff:
+                        os.unlink(entry.path)
+
     @staticmethod
     def _replace(target: Path, data: bytes) -> None:
         fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".agentops-", suffix=".tmp")
@@ -404,6 +421,7 @@ class Workspace:
         receipt = self._receipt_path(actor)
         if receipt is not None:  # write-ahead: the receipt exists before the file changes
             receipt.parent.mkdir(parents=True, exist_ok=True)
+            self._prune_receipts()
             self._replace(receipt, result.model_dump_json().encode())
         self._replace(full, data)
         return result
@@ -471,6 +489,7 @@ class Workspace:
                 env=scrubbed_env(self._home, self.root.parent),
                 timeout_s=self._m.exec_timeout_s,
                 max_output_bytes=self._m.max_output_bytes,
+                sandbox=self._m.sandbox,
             ):
                 if isinstance(item, ExecResult):
                     result = item
@@ -499,6 +518,9 @@ class Workspace:
         return result
 
 
+_LAST_PRUNE: dict[Path, float] = {}
+
+
 class WorkspaceManager:
     def __init__(
         self,
@@ -509,11 +531,14 @@ class WorkspaceManager:
         max_write_bytes: int = 200_000,
         exec_timeout_s: float = 60.0,
         max_output_bytes: int = 64_000,
+        sandbox: DockerSandbox | None = None,
+        receipt_ttl_s: float = 7 * 86_400,
     ) -> None:
         self.base = Path(os.path.realpath(root.expanduser()))
         self.audit = audit
         self.max_read_bytes, self.max_write_bytes = max_read_bytes, max_write_bytes
         self.exec_timeout_s, self.max_output_bytes = exec_timeout_s, max_output_bytes
+        self.sandbox, self.receipt_ttl_s = sandbox, receipt_ttl_s
 
     def for_tenant(self, tenant_id: str) -> Workspace:
         return Workspace(self, tenant_id)

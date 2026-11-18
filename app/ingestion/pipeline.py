@@ -10,12 +10,15 @@ Invariant: a document is READY only if every chunk has an embedding and all chun
 in the same transaction that flipped the status. Any failure leaves it FAILED with zero chunks.
 """
 
+import asyncio
+import contextlib
 import hashlib
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import undefer
@@ -75,7 +78,7 @@ class IngestionService:
         async with self._sessions() as session:
             existing = await self._by_hash(session, tenant_id, content_hash)
             if existing:
-                return existing, False
+                return await self._resurface(existing), False
             latest_version = await session.scalar(
                 select(func.max(Document.version)).where(
                     Document.tenant_id == tenant_id, Document.filename == name
@@ -114,6 +117,22 @@ class IngestionService:
             )
             return doc, True
 
+    async def _resurface(self, doc: Document) -> Document:
+        """Identical bytes uploaded again. An older indexed version becomes the latest again
+        (the user is restoring it); a FAILED one is queued for another attempt."""
+        if doc.status == DocumentStatus.FAILED:
+            with contextlib.suppress(ConflictError):
+                return await self.mark_for_reindex(doc.tenant_id, doc.id)
+        elif doc.searchable and not doc.is_latest:
+            async with self._sessions() as session, session.begin():
+                await session.execute(
+                    update(Document)
+                    .where(Document.tenant_id == doc.tenant_id, Document.filename == doc.filename)
+                    .values(is_latest=Document.id == doc.id)
+                )
+            logger.info("older version restored as latest", extra={"document_id": str(doc.id)})
+        return await self.get(doc.tenant_id, doc.id)
+
     @staticmethod
     async def _by_hash(session: AsyncSession, tenant_id: str, content_hash: str) -> Document | None:
         doc: Document | None = await session.scalar(
@@ -125,23 +144,133 @@ class IngestionService:
 
     # --- background path -----------------------------------------------------------------------
 
-    async def process_document(self, document_id: uuid.UUID) -> DocumentStatus:
-        config = self.chunking_config
-        async with self._sessions() as session:
-            doc = await session.scalar(
-                select(Document)
-                .options(undefer(Document.extracted_text))
-                .where(Document.id == document_id)
-            )
-            if doc is None:
-                logger.warning(
-                    "process_document: document vanished", extra={"document_id": str(document_id)}
+    async def _claim(self, document_id: uuid.UUID) -> Document | None:
+        """Atomically take a queued document (or one whose worker's lease ran out). Exactly one
+        caller wins, whether that is the upload's own task, the worker, or the CLI."""
+        now = datetime.now(UTC)
+        async with self._sessions() as session, session.begin():
+            doc: Document | None = await session.scalar(
+                update(Document)
+                .where(
+                    Document.id == document_id,
+                    or_(
+                        Document.status == DocumentStatus.PENDING,
+                        (Document.status == DocumentStatus.PROCESSING)
+                        & (Document.lease_until < now),
+                    ),
                 )
+                .values(
+                    status=DocumentStatus.PROCESSING,
+                    error=None,
+                    attempts=Document.attempts + 1,
+                    lease_until=now + timedelta(seconds=self._settings.indexing_lease_s),
+                )
+                .returning(Document)
+                .options(undefer(Document.extracted_text))
+            )
+        return doc
+
+    async def _wait_for(self, document_id: uuid.UUID) -> DocumentStatus:
+        """Another worker holds the document: wait for its outcome (bounded by the lease)."""
+        deadline = asyncio.get_running_loop().time() + self._settings.indexing_lease_s
+        while True:
+            async with self._sessions() as session:
+                status = await session.scalar(
+                    select(Document.status).where(Document.id == document_id)
+                )
+            if status is None:
                 return DocumentStatus.FAILED
-            doc.status, doc.error = DocumentStatus.PROCESSING, None
-            await session.commit()
-            filename, tenant_id, text = doc.filename, doc.tenant_id, doc.extracted_text
-            version = doc.version
+            if status in (DocumentStatus.READY, DocumentStatus.FAILED):
+                return status
+            if asyncio.get_running_loop().time() > deadline:
+                return status
+            await asyncio.sleep(0.2)
+
+    async def _heartbeat(self, document_id: uuid.UUID) -> None:
+        lease = self._settings.indexing_lease_s
+        while True:
+            await asyncio.sleep(lease / 3)
+            async with self._sessions() as session, session.begin():
+                await session.execute(
+                    update(Document)
+                    .where(Document.id == document_id, Document.status == DocumentStatus.PROCESSING)
+                    .values(lease_until=datetime.now(UTC) + timedelta(seconds=lease))
+                )
+
+    async def pending_work(self, grace_s: float, limit: int = 20) -> list[uuid.UUID]:
+        """Documents a worker should pick up: queued for longer than `grace_s` (the request's
+        own task should have taken them) or processing with an expired lease."""
+        now = datetime.now(UTC)
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(Document.id)
+                .where(
+                    or_(
+                        (Document.status == DocumentStatus.PENDING)
+                        & (Document.updated_at < now - timedelta(seconds=grace_s)),
+                        (Document.status == DocumentStatus.PROCESSING)
+                        & (Document.lease_until < now),
+                    )
+                )
+                .order_by(Document.updated_at)
+                .limit(limit)
+            )
+            return list(rows)
+
+    async def process_document(self, document_id: uuid.UUID) -> DocumentStatus:
+        doc = await self._claim(document_id)
+        if doc is None:
+            return await self._wait_for(document_id)
+        if doc.attempts > self._settings.indexing_max_attempts:
+            return await self._fail(
+                document_id,
+                f"Gave up after {doc.attempts - 1} attempts (the process indexing it kept dying)",
+                keep_index=doc.searchable,
+            )
+        heartbeat = asyncio.create_task(self._heartbeat(document_id))
+        try:
+            return await self._index(doc)
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _fail(self, document_id: uuid.UUID, safe: str, *, keep_index: bool) -> DocumentStatus:
+        async with self._sessions() as session, session.begin():
+            if keep_index:
+                # A reindex failed: the previous chunks were never touched and keep serving.
+                await session.execute(
+                    update(Document)
+                    .where(Document.id == document_id)
+                    .values(
+                        status=DocumentStatus.READY,
+                        error=f"Reindex failed; the previous index is still served: {safe}",
+                        lease_until=None,
+                        attempts=0,
+                    )
+                )
+                return DocumentStatus.READY
+            await session.execute(
+                delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
+            )
+            await session.execute(
+                update(Document)
+                .where(Document.id == document_id)
+                .values(
+                    status=DocumentStatus.FAILED,
+                    error=safe,
+                    chunk_count=0,
+                    is_latest=False,
+                    searchable=False,
+                    lease_until=None,
+                )
+            )
+        return DocumentStatus.FAILED
+
+    async def _index(self, doc: Document) -> DocumentStatus:
+        config = self.chunking_config
+        document_id = doc.id
+        filename, tenant_id, text = doc.filename, doc.tenant_id, doc.extracted_text
+        version, was_searchable = doc.version, doc.searchable
 
         try:
             chunks = chunk_text(text, config)
@@ -184,7 +313,7 @@ class IngestionService:
                         Document.tenant_id == tenant_id,
                         Document.filename == filename,
                         Document.version > version,
-                        Document.status == DocumentStatus.READY,
+                        Document.searchable.is_(True),
                     )
                 )
                 if not newer_ready:
@@ -202,7 +331,11 @@ class IngestionService:
                     .where(Document.id == document_id)
                     .values(
                         status=DocumentStatus.READY,
+                        error=None,
                         is_latest=not newer_ready,
+                        searchable=True,
+                        attempts=0,
+                        lease_until=None,
                         chunk_count=len(chunks),
                         embedding_model=self._embedder.model,
                         chunking_config=config.key,
@@ -217,18 +350,7 @@ class IngestionService:
                     "error_code": getattr(exc, "code", type(exc).__name__),
                 },
             )
-            async with self._sessions() as session, session.begin():
-                await session.execute(
-                    delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
-                )
-                await session.execute(
-                    update(Document)
-                    .where(Document.id == document_id)
-                    .values(
-                        status=DocumentStatus.FAILED, error=safe, chunk_count=0, is_latest=False
-                    )
-                )
-            return DocumentStatus.FAILED
+            return await self._fail(document_id, safe, keep_index=was_searchable)
 
         logger.info(
             "document indexed",
@@ -305,12 +427,34 @@ class IngestionService:
             return list(rows), total or 0
 
     async def delete(self, tenant_id: str, document_id: uuid.UUID) -> None:
+        """Delete one version. Deleting the latest version makes the newest remaining indexed
+        version of the same file latest again, so the file does not vanish from search."""
         async with self._sessions() as session, session.begin():
-            result = await session.execute(
-                delete(Document).where(Document.id == document_id, Document.tenant_id == tenant_id)
-            )
-            if result.rowcount == 0:  # type: ignore[attr-defined]
+            gone = (
+                await session.execute(
+                    delete(Document)
+                    .where(Document.id == document_id, Document.tenant_id == tenant_id)
+                    .returning(Document.filename, Document.is_latest)
+                )
+            ).one_or_none()
+            if gone is None:
                 raise NotFoundError("Document not found")
+            filename, was_latest = gone
+            if was_latest:
+                previous = await session.scalar(
+                    select(Document.id)
+                    .where(
+                        Document.tenant_id == tenant_id,
+                        Document.filename == filename,
+                        Document.searchable.is_(True),
+                    )
+                    .order_by(Document.version.desc())
+                    .limit(1)
+                )
+                if previous is not None:
+                    await session.execute(
+                        update(Document).where(Document.id == previous).values(is_latest=True)
+                    )
 
     async def mark_for_reindex(self, tenant_id: str, document_id: uuid.UUID) -> Document:
         # One conditional UPDATE: two concurrent reindex requests cannot both pass the check.
@@ -322,7 +466,8 @@ class IngestionService:
                     Document.tenant_id == tenant_id,
                     Document.status.not_in([DocumentStatus.PENDING, DocumentStatus.PROCESSING]),
                 )
-                .values(status=DocumentStatus.PENDING, error=None)
+                # searchable is left alone: the current index serves until the new one lands.
+                .values(status=DocumentStatus.PENDING, error=None, attempts=0, lease_until=None)
                 .returning(Document.id)
             )
         doc = await self.get(tenant_id, document_id)  # NotFoundError if missing / other tenant

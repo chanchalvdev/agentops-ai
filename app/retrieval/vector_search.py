@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import Select, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Document, DocumentChunk, DocumentStatus
+from app.db.models import Document, DocumentChunk
 from app.retrieval.schemas import Candidate, RetrievalFilters
 
 type AnySelect = Select[*tuple[Any, ...]]
@@ -32,7 +32,9 @@ def scoped_select(tenant_id: str, filters: RetrievalFilters, *score: Any) -> Any
         .where(
             DocumentChunk.tenant_id == tenant_id,
             Document.tenant_id == tenant_id,
-            Document.status == DocumentStatus.READY,
+            # searchable, not status == READY: a document being reindexed keeps serving its
+            # previous index until the new chunks replace it.
+            Document.searchable.is_(True),
             Document.is_latest.is_(True),
         )
     )

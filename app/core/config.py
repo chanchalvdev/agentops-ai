@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     chunk_strategy: Literal["structured", "fixed"] = "structured"
     chunk_size_chars: int = Field(default=1200, ge=200, le=8000)
     chunk_overlap_chars: int = Field(default=200, ge=0, le=2000)
+    # Durable indexing: a worker reclaims documents left PENDING (the request's own task never
+    # ran, e.g. a crash) or PROCESSING past their lease (the worker died mid-document).
+    indexing_worker_enabled: bool = True
+    indexing_poll_s: float = Field(default=15.0, gt=0)
+    indexing_lease_s: float = Field(default=600.0, ge=5)
+    indexing_max_attempts: int = Field(default=3, ge=1)
 
     # Retrieval
     retrieval_top_k: int = Field(default=6, ge=1, le=50)
@@ -92,6 +98,14 @@ class Settings(BaseSettings):
     agent_deadline_s: float = Field(default=180.0, gt=0, le=900)
     # Where paused graph runs are persisted. "memory" loses pending approvals on restart.
     agent_checkpointer: Literal["postgres", "memory"] = "postgres"
+    # A pending approval with no decision for this long expires; its run ends "cancelled".
+    # A streamed run whose client disconnects keeps running this long, so the client can
+    # reconnect (GET /executions/{id}/stream with Last-Event-ID); 0 = cancel at once.
+    sse_reconnect_grace_s: float = Field(default=30.0, ge=0, le=600)
+    approval_ttl_s: float = Field(default=86_400.0, gt=0)
+    # A decided approval whose run is still paused this long after the decision lost its
+    # resume (process died): it goes back to pending. Must exceed the longest possible resume.
+    approval_resume_grace_s: float = Field(default=1_200.0, gt=0)
     # History budget for the agent prompt (~4 chars/token), leaving room for tools and output.
     agent_max_context_chars: int = Field(default=20_000, ge=2000)
 
@@ -104,6 +118,13 @@ class Settings(BaseSettings):
     workspace_max_write_bytes: int = Field(default=200_000, ge=1000, le=5_000_000)
     workspace_exec_timeout_s: float = Field(default=60.0, gt=0, le=600)
     workspace_max_output_bytes: int = Field(default=64_000, ge=1000, le=1_000_000)
+    # "docker": every command runs in a throwaway container (no network, no capabilities,
+    # read-only rootfs, resource limits). Build the image: docker/sandbox.Dockerfile.
+    workspace_exec_backend: Literal["host", "docker"] = "host"
+    workspace_sandbox_image: str = "agentops-sandbox:1"
+    workspace_sandbox_cpus: str = "1"
+    workspace_sandbox_memory: str = "512m"
+    workspace_receipt_ttl_s: float = Field(default=7 * 86_400.0, ge=3600)
 
     # Observability (product.txt 10). Traces always go to the local log sink; hosted backends are
     # optional and the app runs without them. Enabling one sends questions, answers, tool

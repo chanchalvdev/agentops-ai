@@ -81,6 +81,7 @@ class GraphRunner:
         tuning: AgentTuning | None = None,
     ) -> None:
         self.harness = harness
+        self._checkpointer = checkpointer
         self.graph = build_graph(checkpointer)
         self._max_output_tokens = max_output_tokens
         self.tuning = tuning or AgentTuning()
@@ -159,6 +160,12 @@ class GraphRunner:
     async def pending_approval(self, ctx: ExecutionContext) -> dict[str, Any] | None:
         snapshot = await self.graph.aget_state(self._config(ctx))
         return snapshot.interrupts[0].value if snapshot.interrupts else None
+
+    async def forget(self, execution_id: uuid.UUID) -> None:
+        """Delete a finished run's checkpoints. They exist only to resume a paused run; kept
+        forever they would retain passage text and tool arguments for no purpose."""
+        if self._checkpointer is not None:
+            await self._checkpointer.adelete_thread(str(execution_id))
 
     async def restore_context(self, execution_id: uuid.UUID) -> ExecutionContext | None:
         """Rebuild the ExecutionContext of a paused run from its last checkpoint."""

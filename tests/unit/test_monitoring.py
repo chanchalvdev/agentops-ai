@@ -351,3 +351,20 @@ def test_benchmark_verdict_requires_a_gain_without_quality_loss() -> None:
     assert not v["successful"] and v["quality_breaches"] and v["newly_failing"] == ["c18", "c19"]
     table = markdown([base, faster, worse], t)
     assert "| optimized | 100%" in table and "NOT ACCEPTED" in table
+
+
+def test_one_newly_failing_case_is_named_even_when_the_pass_rate_holds() -> None:
+    base = run_report([True] * 37 + [False])
+    head = run_report([True] * 36 + [False, True])  # c36 regressed, c37 recovered: same rate
+    assert by_metric(quality_signals(base, head, T), "pass_rate").status == "ok"
+    sig = by_metric(quality_signals(base, head, T), "newly_failing_cases")
+    assert sig.status == "drift" and sig.evidence == "measured"
+    assert sig.current == 1.0 and "c36" in sig.message and "c37" not in sig.message
+
+
+def test_no_regressed_case_is_ok() -> None:
+    sig = by_metric(
+        quality_signals(run_report([True, False]), run_report([True, True]), T),
+        "newly_failing_cases",
+    )
+    assert sig.status == "ok" and sig.message == "no case regressed"

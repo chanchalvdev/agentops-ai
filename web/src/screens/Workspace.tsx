@@ -213,7 +213,7 @@ export default function Workspace({ initialPath }: { initialPath?: string }) {
 
   const dirty = file !== null && draft !== file.content;
   return (
-    <div className="mx-auto max-w-[1400px] px-8 py-8">
+    <div className="mx-auto max-w-[1400px] px-4 sm:px-8 py-6 sm:py-8">
       <PageHead
         title="Workspace"
         sub="Your sandboxed directory. Your own edits save directly; changes the agent proposes wait in Approvals."

@@ -59,6 +59,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         owned = services is None
         app.state.services = services or build_services(settings)
         await app.state.services.start()
+        if owned:  # a server process (not a test injecting shared services) runs the worker
+            app.state.services.start_indexing_worker()
         logger.info(
             "startup",
             extra={

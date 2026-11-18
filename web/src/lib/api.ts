@@ -2,7 +2,7 @@
 // approvals, limits, tenant isolation) is the server's; the UI only sends the user's API key.
 import { SseParser } from "./sse";
 import type {
-  AgentRunResult,
+  Alert,
   Approval,
   AuditEntry,
   CheckOut,
@@ -16,6 +16,7 @@ import type {
   ListResult,
   MonitoringSummary,
   RunReport,
+  Resumed,
   RunRow,
   SearchResult,
   StreamEvent,
@@ -113,10 +114,23 @@ export const api = {
   execution: (id: string) => get<Execution>(`/api/v1/executions/${id}`),
   trace: (id: string) => get<TraceEvent[]>(`/api/v1/executions/${id}/trace`),
   approvals: (status: "pending" | "all") => get<Approval[]>("/api/v1/approvals", { status }),
-  decide: (id: string, approve: boolean, reason?: string) =>
-    request<AgentRunResult>("POST", `/api/v1/approvals/${id}/${approve ? "approve" : "reject"}`, {
-      reason: reason || null,
-    }),
+  /** Record the decision (202), then poll the execution until the resumed run leaves
+   *  awaiting_approval. The request returns at once; the run can take minutes locally. */
+  decide: async (id: string, approve: boolean, reason?: string, signal?: AbortSignal): Promise<Resumed> => {
+    const accepted = await request<{ execution_id: string }>(
+      "POST",
+      `/api/v1/approvals/${id}/${approve ? "approve" : "reject"}`,
+      { reason: reason || null },
+    );
+    for (let delay = 500; ; delay = Math.min(delay * 1.5, 4000)) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+      const e = await api.execution(accepted.execution_id);
+      if (e.status !== "awaiting_approval" && e.status !== "running") {
+        return { execution_id: e.id, status: e.status, answer: e.answer ?? "", total_ms: e.total_ms };
+      }
+    }
+  },
 
   // workspace
   tree: (path: string) => get<ListResult>("/api/v1/workspace/tree", { path }),
@@ -133,37 +147,74 @@ export const api = {
   monitoringSummary: () => get<MonitoringSummary>("/api/v1/monitoring/summary"),
   latestDrift: () => get<CheckOut | null>("/api/v1/monitoring/drift"),
   runDriftCheck: () => request<CheckOut>("POST", "/api/v1/monitoring/check"),
+  acknowledgeAlert: (id: string, note?: string) =>
+    request<Alert>("POST", `/api/v1/monitoring/alerts/${id}/acknowledge`, note ? { note } : undefined),
 };
 
-/** POST /agent/run/stream, delivering each SSE event as it arrives. Resolves when the stream ends. */
+/** POST /agent/run/stream, delivering each SSE event as it arrives. Resolves when the stream ends.
+ *  If the connection drops mid-run, reconnects (GET /executions/{id}/stream with Last-Event-ID)
+ *  and continues where it left off; the server keeps the run alive for a grace period. */
 export async function streamAgent(
   question: string,
   mode: "graph" | "loop",
   onEvent: (e: StreamEvent) => void,
   signal?: AbortSignal,
+  maxReconnects = 5,
 ): Promise<void> {
-  const res = await fetch("/api/v1/agent/run/stream", {
-    method: "POST",
-    headers: headers({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ question, mode }),
-    signal,
-  });
-  if (!res.ok || !res.body) throw await toError(res);
-  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-  const parser = new SseParser();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    for (const m of parser.push(value)) {
-      let data: unknown = m.data;
-      try {
-        data = JSON.parse(m.data);
-      } catch {
-        /* keep raw text */
+  let executionId: string | null = null;
+  let lastId: string | null = null;
+  let finished = false;
+
+  async function consume(res: Response, first: boolean): Promise<void> {
+    if (!res.ok || !res.body) throw await toError(res);
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    const parser = new SseParser();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      for (const m of parser.push(value)) {
+        if (m.id !== undefined) lastId = m.id;
+        let data: unknown = m.data;
+        try {
+          data = JSON.parse(m.data);
+        } catch {
+          /* keep raw text */
+        }
+        if (m.event === "start") {
+          executionId = (data as { execution_id: string }).execution_id;
+          if (!first) continue; // a reconnect repeats "start": the caller already has it
+        }
+        if (m.event === "final" || m.event === "error") finished = true;
+        onEvent({ event: m.event, data } as StreamEvent);
       }
-      onEvent({ event: m.event, data } as StreamEvent);
     }
   }
+
+  try {
+    await consume(
+      await fetch("/api/v1/agent/run/stream", {
+        method: "POST",
+        headers: headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ question, mode }),
+        signal,
+      }),
+      true,
+    );
+  } catch (err) {
+    if (signal?.aborted || executionId === null) throw err;
+  }
+  for (let attempt = 1; !finished && executionId !== null && attempt <= maxReconnects; attempt++) {
+    if (signal?.aborted) return;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** attempt, 8000)));
+    try {
+      const extra: Record<string, string> = lastId !== null ? { "Last-Event-ID": lastId } : {};
+      await consume(await fetch(`/api/v1/executions/${executionId}/stream`, { headers: headers(extra), signal }), false);
+    } catch (err) {
+      if (signal?.aborted) return;
+      if (err instanceof ApiError && err.status < 500) throw err;
+    }
+  }
+  if (!finished) throw new Error("The connection to the run was lost and could not be re-established.");
 }
 
 /** The workspace terminal WebSocket: same executor and policy as the REST exec endpoint. */

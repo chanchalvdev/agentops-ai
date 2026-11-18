@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
+from app.core.errors import ConflictError, NotFoundError
 from app.db.models import DriftCheck, EvaluationRun, MonitoringAlert
 from app.evaluation.dataset import load_dataset
 from app.evaluation.regression import load_report
@@ -54,6 +55,9 @@ class AlertOut(BaseModel):
     message: str
     status: str
     created_at: datetime
+    acknowledged_by: str | None = None
+    acknowledged_at: datetime | None = None
+    ack_note: str | None = None
 
 
 class CheckOut(BaseModel):
@@ -235,6 +239,22 @@ class MonitoringService:
                 query = query.where(MonitoringAlert.status == status)
             rows = await session.scalars(query.limit(limit))
             return [AlertOut.model_validate(a) for a in rows]
+
+    async def acknowledge(self, alert_id: uuid.UUID, by: str, note: str | None) -> AlertOut:
+        """Mark an open alert as seen by a human. Acknowledging keeps the record (and the
+        drift check it came from); it only takes the alert off the open list."""
+        async with self.s.sessions() as session, session.begin():
+            row = await session.get(MonitoringAlert, alert_id, with_for_update=True)
+            if row is None:
+                raise NotFoundError("Alert not found")
+            if row.status != "open":
+                raise ConflictError("Alert is already acknowledged")
+            row.status = "acknowledged"
+            row.acknowledged_by = by
+            row.acknowledged_at = datetime.now(UTC)
+            row.ack_note = note
+            await session.flush()
+            return AlertOut.model_validate(row)
 
     async def eval_history(self, limit: int = 20) -> list[dict[str, Any]]:
         async with self.s.sessions() as session:

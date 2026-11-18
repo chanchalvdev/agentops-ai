@@ -100,6 +100,24 @@ class EvidenceStore:
         body = escape_untrusted(json.dumps(ref.output, default=str))
         return f'<tool_result id="{label}" tool="{ref.tool}">\n{body}\n</tool_result>'
 
+    def recap(self, labels: list[str], max_chars: int) -> str:
+        """One short fenced line per label, for evidence whose full turn was trimmed away."""
+        per = max(80, max_chars // max(1, len(labels)) - 60)
+        lines = []
+        for label in labels:
+            if (p := self.passages.get(label)) is not None:
+                body = f'file="{escape_untrusted(p["filename"])}"> ' + escape_untrusted(
+                    " ".join(str(p["text"]).split())[:per]
+                )
+            elif (ref := self.tool_results.get(label)) is not None:
+                body = f'tool="{ref.tool}"> ' + escape_untrusted(
+                    json.dumps(ref.output, default=str)[:per]
+                )
+            else:
+                continue
+            lines.append(f'<recap id="{label}" {body}</recap>')
+        return "\n".join(lines)[:max_chars]
+
     def citations(self, labels: list[str]) -> list[Citation]:
         out = []
         for label in labels:

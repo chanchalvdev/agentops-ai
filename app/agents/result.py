@@ -38,6 +38,11 @@ FALLBACK_TEXT: dict[str, str] = {
 }
 
 
+# Runs that stopped before answering: `citations` lists every source gathered so far (nothing was
+# cited), so the execution row keeps the partial evidence, not only the ledger.
+STOPPED_STATUSES = frozenset({"budget_exhausted", "deadline_exceeded", "cancelled", "failed"})
+
+
 class AgentRunResult(BaseModel):
     execution_id: uuid.UUID
     request_id: str
@@ -80,6 +85,10 @@ def build_result(
     verification: str | None = None,
 ) -> AgentRunResult:
     labels = cited_labels(final) if final and status == "answered" else []
+    if status in STOPPED_STATUSES:
+        if not store.passages and isinstance(ctx.evidence, EvidenceStore):
+            store = ctx.evidence
+        labels = list(store.passages)
     answer = final.answer if final and status in ("answered", "insufficient_evidence") else None
     counters = ctx.counters
     return AgentRunResult(
@@ -89,7 +98,7 @@ def build_result(
         status=status,
         answer=answer or FALLBACK_TEXT.get(status, ""),
         citations=store.citations(labels),
-        tool_references=store.references(labels),
+        tool_references=store.references(labels) if status not in STOPPED_STATUSES else [],
         error_code=error.code if error else error_code,
         verification=verification,
         steps=counters.steps,

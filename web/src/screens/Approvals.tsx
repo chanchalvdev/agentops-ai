@@ -6,7 +6,7 @@ import { ApiError, api } from "../lib/api";
 import { applyEdit, lineDiff, withContext } from "../lib/diff";
 import { when } from "../lib/format";
 import { navigate } from "../lib/nav";
-import type { AgentRunResult, Approval } from "../lib/types";
+import type { Approval, Resumed } from "../lib/types";
 
 /** Current content of the target file, or "" when it does not exist yet (a new file). */
 async function currentFile(path: string): Promise<{ content: string; exists: boolean; truncated: boolean }> {
@@ -124,7 +124,7 @@ function HeldChain({ executionId, version }: { executionId: string; version: str
   );
 }
 
-function ApprovalRecord({ approval, onDecided }: { approval: Approval; onDecided: (r: AgentRunResult) => void }) {
+function ApprovalRecord({ approval, onDecided }: { approval: Approval; onDecided: (r: Resumed) => void }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -198,10 +198,10 @@ function ApprovalRecord({ approval, onDecided }: { approval: Approval; onDecided
 export default function Approvals() {
   const [status, setStatus] = useState<"pending" | "all">("pending");
   const list = useLoad(() => api.approvals(status), [status]);
-  const [last, setLast] = useState<AgentRunResult | null>(null);
+  const [last, setLast] = useState<Resumed | null>(null);
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-8">
+    <div className="mx-auto max-w-5xl px-4 sm:px-8 py-6 sm:py-8">
       <PageHead
         title="Approvals"
         sub="Writes and side-effecting commands the agent proposed. Nothing changes until you countersign; the run then resumes from its checkpoint."
@@ -222,7 +222,7 @@ export default function Approvals() {
       />
       {last && (
         <section className="mb-8 flex flex-wrap items-center gap-5 border-1.5 border-ink bg-paper px-5 py-4" aria-live="polite">
-          <Seal status={last.status} verification={last.verification} totalMs={last.total_ms} />
+          <Seal status={last.status} totalMs={last.total_ms} />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold">
               Run {recordId("EX", last.execution_id)} resumed and sealed

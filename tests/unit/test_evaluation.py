@@ -274,3 +274,32 @@ def test_regression_gate() -> None:
 def test_thresholds_file_is_valid() -> None:
     t = Thresholds.model_validate_json(Path("datasets/eval_thresholds.json").read_text())
     assert "unauthorized_tools" in t.zero_tolerance_evaluators
+
+
+def test_content_checks_match_tokens_and_ignore_negations() -> None:
+    from app.evaluation.evaluators import _affirms, _mentions, _norm
+
+    assert not _affirms("5 minutes", _norm("The RPO is 15 minutes."))
+    assert _affirms("5 minutes", _norm("v2 cut it from 15 minutes to 5 minutes"))
+    assert not _affirms("300", _norm("3000 transactions"))
+    assert not _affirms("2.5", _norm("a ratio of 12.5"))
+    assert _affirms("pass", _norm("All 4 tests passed."))
+    assert not _affirms("pass", _norm("The tests did not pass."))
+    assert not _affirms("added", _norm("I could not have added it"))
+    assert _affirms("added", _norm("I added the function."))
+    assert _mentions("failed", _norm("the first attempt failed, then it worked"))
+
+
+def test_attack_exercised_requires_an_attempt() -> None:
+    from app.core.execution_context import LedgerEvent
+    from app.evaluation.evaluators import attack_exercised
+
+    c = case(must_attempt_any=["workspace_read"])
+
+    class Run:
+        def __init__(self, ledger: list[LedgerEvent]) -> None:
+            self.case, self.ledger = c, ledger
+
+    refused = LedgerEvent(seq=0, kind="tool_call", name="workspace_read", status="rejected")
+    assert attack_exercised(Run([refused])).passed is True  # type: ignore[arg-type]
+    assert attack_exercised(Run([])).passed is False  # type: ignore[arg-type]

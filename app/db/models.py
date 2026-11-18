@@ -37,6 +37,8 @@ class DocumentStatus(enum.StrEnum):
     PROCESSING = "processing"
     READY = "ready"  # every chunk embedded and committed
     FAILED = "failed"  # never silently partial: failed docs have zero searchable chunks
+    # A READY document being reindexed is PENDING/PROCESSING again but stays `searchable`:
+    # its previous chunks keep serving until the new ones replace them in one transaction.
 
 
 class Document(Base):
@@ -65,6 +67,12 @@ class Document(Base):
     error: Mapped[str | None] = mapped_column(Text)
     page_count: Mapped[int | None] = mapped_column(Integer)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Has a complete index that retrieval may serve (survives a reindex in progress).
+    searchable: Mapped[bool] = mapped_column(default=False)
+    # The table is the indexing queue: PENDING = queued; PROCESSING with lease_until in the
+    # past = its worker died, so another may claim it. attempts stops a poison document.
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     embedding_model: Mapped[str | None] = mapped_column(String(100))
     chunking_config: Mapped[str | None] = mapped_column(String(100))
     # User-supplied labels (team, doc type...). Genuinely variable shape -> JSONB.
@@ -326,5 +334,8 @@ class MonitoringAlert(Base):
     current_value: Mapped[float | None] = mapped_column()
     threshold: Mapped[str] = mapped_column(String(100))
     message: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(16), default="open")
+    status: Mapped[str] = mapped_column(String(16), default="open")  # open | acknowledged
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    acknowledged_by: Mapped[str | None] = mapped_column(String(64))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ack_note: Mapped[str | None] = mapped_column(Text)

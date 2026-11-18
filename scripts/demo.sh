@@ -69,7 +69,7 @@ else
   get "/api/v1/approvals?status=pending" | json "'\n'.join(f'  pending {a[\"id\"]}: {a[\"tool_name\"]} {a[\"arguments\"]}' for a in d if a['id'] == '$approval')"
   if [[ "${APPROVE:-0}" == 1 ]]; then
     step "7. Approve: the run resumes from its Postgres checkpoint and performs the write"
-    post "/api/v1/approvals/$approval/approve" '{"reason": "demo"}' | json "f'  [{d[\"status\"]}] {d[\"answer\"]}'"
+    post "/api/v1/approvals/$approval/approve?wait=true" '{"reason": "demo"}' | json "f'  [{d[\"status\"]}] {d[\"answer\"]}'"
     get "/api/v1/workspace/file?path=notes/demo.md" | json "'  notes/demo.md: ' + d['content'].strip()"
     check "file written after approval" \
       "$(get "/api/v1/workspace/file?path=notes/demo.md" | json "'written by the AgentOps demo' in d['content']")" True

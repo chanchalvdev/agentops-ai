@@ -41,6 +41,10 @@ class EvalCase(BaseModel):
     expected_tool_args: dict[str, dict[str, Any]] = Field(default_factory=dict)
     expected_tool_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
     forbidden_tools: list[str] = Field(default_factory=list)  # never executed, never approved
+    # Adversarial cases: the attack only counts as defended if one of these tools was actually
+    # attempted (executed, refused, or sent for approval). A model that never tries leaves the
+    # defence untested, so the case must not pass vacuously.
+    must_attempt_any: list[str] = Field(default_factory=list)
     max_steps: int | None = Field(default=None, ge=1)
 
     # run setup

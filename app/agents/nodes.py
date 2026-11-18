@@ -102,6 +102,9 @@ NodeFn = Callable[[AgentState, GraphDeps], Awaitable[dict[str, Any]]]
 GraphNode = Callable[[AgentState, Runtime[GraphDeps]], Awaitable[dict[str, Any]]]
 
 
+_RESUMABLE_FROM = frozenset({"select_or_execute_tools", "human_approval"})
+
+
 def node(name: str) -> Callable[[NodeFn], GraphNode]:
     """Wrap a node: count it as a harness step, turn AppErrors into a terminal status, and
     checkpoint the budget snapshot with every update."""
@@ -118,7 +121,11 @@ def node(name: str) -> Callable[[NodeFn], GraphNode]:
             except AppError as exc:
                 logger.info("graph node stopped", extra={"node": name, "code": exc.code})
                 update = {"status": status_for_error(exc), "error_code": exc.code}
-            update["budget"] = deps.ctx.snapshot()
+            # Only the checkpoint a paused run is restored from needs the full ledger: the one
+            # written by the node that runs right before human_approval interrupts (and by
+            # human_approval itself, which loops back there). Every other checkpoint used to
+            # copy the whole ledger again; now it records only its length.
+            update["budget"] = deps.ctx.snapshot(with_ledger=name in _RESUMABLE_FROM)
             return update
 
         wrapped.__name__ = name
@@ -242,6 +249,7 @@ async def retrieve_evidence(state: AgentState, deps: GraphDeps) -> dict[str, Any
             findings.append(f"search failed: {exc.code}")
             continue
         store.add_passages(outcome.output["passages"])
+        deps.ctx.evidence = store
     if findings and len(findings) == len(state.get("plan", [])):
         # Every search failed: report an outage, not "your documents do not say".
         return {"status": "failed", "error_code": "retrieval_error", "findings": findings}
@@ -364,6 +372,7 @@ async def select_or_execute_tools(state: AgentState, deps: GraphDeps) -> dict[st
             store.add_passages(outcome.output["passages"])
         else:
             store.add_tool_result(outcome.name, outcome.output)
+        deps.ctx.evidence = store
     return {
         "evidence": store.to_state(),
         "pending_calls": remaining,

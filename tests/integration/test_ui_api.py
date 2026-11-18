@@ -86,6 +86,7 @@ async def test_abandoned_running_evaluations_are_marked_failed(
 
     from sqlalchemy import update
 
+    from app.core.errors import ConflictError
     from app.db.models import EvaluationRun
     from app.evaluation.dataset import Dataset, EvalCase
     from app.evaluation.store import EvaluationStore
@@ -98,13 +99,16 @@ async def test_abandoned_running_evaluations_are_marked_failed(
         Dataset(name="golden_questions", version="t1", sha256="v" * 64, cases=[case])
     )
     old = await store.start_run(ds_id, "cli", "graph", {"mode": "graph"})
-    fresh = await store.start_run(ds_id, "cli", "graph", {"mode": "graph"})
+    with pytest.raises(ConflictError):  # one run at a time, across processes
+        await store.start_run(ds_id, "cli", "graph", {"mode": "graph"})
     async with services.sessions() as session, session.begin():  # the process died 5 h ago
         await session.execute(
             update(EvaluationRun)
             .where(EvaluationRun.id == old.id)
             .values(started_at=datetime.now(UTC) - timedelta(hours=5))
         )
+    await store.expire_stale(services.settings.eval_stale_after_s)
+    fresh = await store.start_run(ds_id, "cli", "graph", {"mode": "graph"})  # lock released
 
     runs = {r["id"]: r for r in (await client.get("/api/v1/evaluations/runs")).json()}
     assert runs[str(old.id)]["status"] == "failed"

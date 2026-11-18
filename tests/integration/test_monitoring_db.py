@@ -139,6 +139,18 @@ async def test_drift_check_detects_a_retrieval_regression_and_records_alerts(
     alerts = (await client.get("/api/v1/monitoring/alerts")).json()
     assert any(a["metric"] == "answer_coverage" for a in alerts)
 
+    acked = await client.post(
+        f"/api/v1/monitoring/alerts/{alert.id}/acknowledge", json={"note": "known: test probe"}
+    )
+    assert acked.status_code == 200, acked.text
+    assert acked.json()["status"] == "acknowledged" and acked.json()["acknowledged_by"]
+    still_open = (await client.get("/api/v1/monitoring/alerts")).json()
+    assert str(alert.id) not in {a["id"] for a in still_open}
+    on_record = (await client.get("/api/v1/monitoring/alerts?status=acknowledged")).json()
+    assert any(a["id"] == str(alert.id) and a["ack_note"] for a in on_record)
+    again = await client.post(f"/api/v1/monitoring/alerts/{alert.id}/acknowledge")
+    assert again.status_code == 409
+
 
 async def test_monitoring_is_operator_only(client: httpx.AsyncClient) -> None:
     for method, path in (

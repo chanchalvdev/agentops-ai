@@ -64,6 +64,9 @@ class ExecutionContext:
     # Called for every ledger event, e.g. to stream progress over SSE. Must not raise or block.
     listeners: list[Callable[[LedgerEvent], None]] = field(default_factory=list)
     elapsed_before_s: float = 0.0  # active time spent before a pause (graph resume)
+    # The latest EvidenceStore of the running loop/graph (not checkpointed): a run that is
+    # cancelled or crashes still reports the sources it had gathered.
+    evidence: Any = None
     started_at: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -90,9 +93,11 @@ class ExecutionContext:
             listener(event)
         return event
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, with_ledger: bool = True) -> dict[str, Any]:
         """JSON-safe state for a checkpoint. Time waiting for a human does not count against
-        the deadline: only elapsed active time is saved, and the clock restarts on resume."""
+        the deadline: only elapsed active time is saved, and the clock restarts on resume.
+        with_ledger=False leaves the (growing) ledger out, for checkpoints a resume never
+        restores from."""
         c = self.counters
         return {
             "tenant_id": self.tenant_id,
@@ -114,7 +119,8 @@ class ExecutionContext:
                 "cost_known": c.cost_known,
                 "corrections": dict(c.corrections),
             },
-            "ledger": [e.model_dump(mode="json") for e in self.ledger],
+            "ledger": [e.model_dump(mode="json") for e in self.ledger] if with_ledger else [],
+            "ledger_len": len(self.ledger),
         }
 
     @classmethod
@@ -142,5 +148,5 @@ class ExecutionContext:
                 cost_known=c["cost_known"],
                 corrections=dict(c["corrections"]),
             ),
-            ledger=[LedgerEvent.model_validate(e) for e in snap["ledger"]],
+            ledger=[LedgerEvent.model_validate(e) for e in snap.get("ledger", [])],
         )

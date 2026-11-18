@@ -102,6 +102,17 @@ def test_terminal_streams_output_and_enforces_policy(
             while ws.receive_json()["type"] != "exit":
                 pass
 
+        tc.app.state.services.rate_limiter.limits["workspace"] = 1
+        with tc.websocket_connect("/api/v1/workspace/terminal") as ws:  # same bucket as HTTP
+            ws.send_json({"api_key": KEY_A})
+            ws.receive_json()
+            ws.send_json({"argv": ["ls"]})  # the bucket now holds at most one token
+            while ws.receive_json()["type"] != "exit":
+                pass
+            ws.send_json({"argv": ["ls"]})
+            assert ws.receive_json()["code"] == "too_many_requests"
+        tc.app.state.services.rate_limiter.limits["workspace"] = 10_000
+
         with tc.websocket_connect("/api/v1/workspace/terminal") as ws:
             ws.send_json({"api_key": "wrong-key-wrong-key"})
             with pytest.raises(WebSocketDisconnect) as closed:

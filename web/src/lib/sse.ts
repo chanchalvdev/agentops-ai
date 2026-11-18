@@ -4,6 +4,8 @@
 export interface SseMessage {
   event: string;
   data: string;
+  /** The `id:` field, if the message had one (used as Last-Event-ID on reconnect). */
+  id?: string;
 }
 
 /** Incremental parser: feed text chunks as they arrive, get complete messages back. Comment
@@ -19,6 +21,7 @@ export class SseParser {
       const block = this.buffer.slice(0, end);
       this.buffer = this.buffer.slice(end + 2);
       let event = "message";
+      let id: string | undefined;
       const data: string[] = [];
       for (const line of block.split("\n")) {
         if (line === "" || line.startsWith(":")) continue;
@@ -28,8 +31,9 @@ export class SseParser {
         if (value.startsWith(" ")) value = value.slice(1);
         if (field === "event") event = value;
         else if (field === "data") data.push(value);
+        else if (field === "id") id = value;
       }
-      if (data.length) out.push({ event, data: data.join("\n") });
+      if (data.length) out.push(id === undefined ? { event, data: data.join("\n") } : { event, data: data.join("\n"), id });
     }
     return out;
   }

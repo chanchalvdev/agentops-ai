@@ -7,8 +7,10 @@ what separates read-only from write/exec access.
 
 import asyncio
 import contextlib
+import json
 import logging
 import shlex
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -20,6 +22,7 @@ from app.core.errors import (
     AuthenticationError,
     InvalidRequestError,
     PermissionDeniedError,
+    TooManyRequestsError,
 )
 from app.core.security import Principal
 from app.services import Services
@@ -161,6 +164,64 @@ async def audit(
     return await services.workspace_audit.recent(principal.tenant_id, limit)
 
 
+def _terminal_rate_limit(services: Services, principal: Principal) -> None:
+    """Each terminal command takes a token from the same bucket as POST /workspace/exec, so
+    the WebSocket is not a way around the HTTP rate limit."""
+    if not services.settings.rate_limit_enabled:
+        return
+    wait = services.rate_limiter.acquire(principal.tenant_id, "workspace")
+    if wait is not None:
+        raise TooManyRequestsError(
+            f"Rate limit exceeded for workspace commands; retry in {wait:.0f} s",
+            retry_after_s=wait,
+        )
+
+
+async def _run_watched(
+    websocket: WebSocket, items: AsyncIterator[str | ExecResult]
+) -> tuple[bool, Any]:
+    """Forward one command's output while also listening to the socket, so a client that
+    disconnects during a silent command (e.g. a long test run) kills it at once instead of
+    when the next output arrives. Frames sent while the command runs get a "busy" error (one
+    command at a time); a frame sent after the exit frame is the next command and is returned.
+    Returns (client still connected, next frame or None)."""
+    exited = asyncio.Event()
+
+    async def forward() -> None:
+        async for item in items:
+            if isinstance(item, ExecResult):
+                await websocket.send_json({"type": "exit", **item.model_dump()})
+                exited.set()
+            else:
+                await websocket.send_json({"type": "output", "data": item})
+
+    command = asyncio.create_task(forward())
+    pending: Any = None
+    try:
+        while not command.done():
+            incoming = asyncio.ensure_future(websocket.receive())
+            done, _ = await asyncio.wait({command, incoming}, return_when=asyncio.FIRST_COMPLETED)
+            if incoming not in done:
+                incoming.cancel()
+                await asyncio.gather(incoming, return_exceptions=True)
+                break
+            frame = incoming.result()
+            if frame.get("type") == "websocket.disconnect":
+                return False, None
+            if exited.is_set():
+                pending = frame  # the next command: handle it once this one is wrapped up
+                break
+            await websocket.send_json(
+                {"type": "error", "code": "busy", "message": "a command is still running"}
+            )
+        await command  # re-raises AppError / disconnect from the command itself
+        return True, pending
+    finally:
+        if not command.done():
+            command.cancel()  # closes the stream: the executor kills the process group
+            await asyncio.gather(command, return_exceptions=True)
+
+
 @router.websocket("/terminal")
 async def terminal(websocket: WebSocket) -> None:
     """Terminal panel protocol (JSON frames). Not a PTY: one allowlisted command at a time.
@@ -191,10 +252,17 @@ async def terminal(websocket: WebSocket) -> None:
         return
     ws = services.workspaces.for_tenant(principal.tenant_id)
     await websocket.send_json({"type": "ready", "tenant": principal.tenant_id})
+    next_frame: Any = None
     with contextlib.suppress(WebSocketDisconnect):
         while True:
             try:
-                message = await websocket.receive_json()
+                if next_frame is not None:
+                    raw, next_frame = next_frame, None
+                    if raw.get("text") is None:
+                        raise ValueError("binary frame")
+                    message = json.loads(raw["text"])
+                else:
+                    message = await websocket.receive_json()
             except ValueError:  # not JSON: tell the client, keep the session
                 await websocket.send_json(
                     {"type": "error", "code": "invalid_request", "message": "frames must be JSON"}
@@ -202,12 +270,13 @@ async def terminal(websocket: WebSocket) -> None:
                 continue
             try:
                 argv = ExecRequest.model_validate(message).to_argv()
+                _terminal_rate_limit(services, principal)
                 await _exec_permission(services, principal, argv)
-                async for item in ws.stream(argv, _actor(principal)):
-                    if isinstance(item, ExecResult):
-                        await websocket.send_json({"type": "exit", **item.model_dump()})
-                    else:
-                        await websocket.send_json({"type": "output", "data": item})
+                connected, next_frame = await _run_watched(
+                    websocket, ws.stream(argv, _actor(principal))
+                )
+                if not connected:
+                    return  # client went away mid-command: the command was killed
             except ValidationError:
                 await websocket.send_json(
                     {

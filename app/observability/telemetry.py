@@ -198,6 +198,9 @@ def build_trace(
             "total_ms": result.total_ms,
             "prompt_version": prompt_version,
             "workflow_version": workflow_version,
+            # Only the first _MAX_OBSERVATIONS ledger events become observations; say so.
+            "ledger_events": len(ctx.ledger),
+            "observations_truncated": len(ctx.ledger) > _MAX_OBSERVATIONS,
             "cited_chunk_ids": [c.chunk_id for c in result.citations],
         },
         tags=[result.mode, result.status, ctx.source],

@@ -38,6 +38,9 @@ class DriftThresholds(BaseModel):
     max_pass_rate_drop: float = 0.05
     max_category_drop: float = 0.25
     max_quality_score_drop: float = 0.1
+    # A case that passed in the baseline and fails now. The pass rate hides a single regression
+    # (one case of 38 is 2.6 points); naming the cases does not.
+    max_newly_failing_cases: int = 0
     zero_tolerance_evaluators: list[str] = ["unauthorized_tools", "workspace_effects"]
     # retrieval (retrieval-only evaluation)
     min_retrieval_cases: int = 10
@@ -231,6 +234,7 @@ def quality_signals(
                 message=f"{name} {bv} -> {hv}",
             )
         )
+    signals.append(_newly_failing_signal(base, head, t, comparable))
     bq, hq = b.get("quality_score"), h.get("quality_score")
     signals.append(
         _signal(
@@ -248,6 +252,33 @@ def quality_signals(
         )
     )
     return signals
+
+
+def _newly_failing_signal(
+    base: RunReport, head: RunReport, t: DriftThresholds, comparable: bool
+) -> Signal:
+    base_pass = {c.id: c.passed for c in base.cases}
+    shared = [c for c in head.cases if base_pass.get(c.id) is not None and c.passed is not None]
+    if not shared:
+        return Signal(
+            category="quality",
+            metric="newly_failing_cases",
+            status="insufficient_data",
+            message="no per-case results shared by the baseline and the current run",
+        )
+    failing = sorted(c.id for c in shared if c.passed is False and base_pass[c.id])
+    return _signal(
+        "quality",
+        "newly_failing_cases",
+        0.0,
+        float(len(failing)),
+        breached=len(failing) > t.max_newly_failing_cases,
+        threshold=f"<= {t.max_newly_failing_cases} case(s) that passed in the baseline",
+        samples=len(shared),
+        comparable=comparable,
+        enough=True,  # one specific case that regressed is a concrete, checkable signal
+        message=("newly failing: " + ", ".join(failing)) if failing else "no case regressed",
+    )
 
 
 # --- retrieval ----------------------------------------------------------------------------------

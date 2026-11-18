@@ -7,7 +7,7 @@ from typing import Any
 
 from app.agents.context import bound_history
 from app.agents.custom_loop import PROMPT_VERSION, AgentLoop
-from app.agents.evidence import EvidenceStore
+from app.agents.evidence import EvidenceStore, FinalAnswer
 from app.agents.harness import Harness
 from app.core.budgets import ExecutionLimits
 from app.core.errors import RetrievalError
@@ -359,6 +359,30 @@ def test_bound_history_keeps_head_and_tool_groups_intact() -> None:
     assert len(kept) == 4  # two whole groups fit; none is split
 
 
+def test_trimmed_turns_leave_a_recap_of_their_citable_sources() -> None:
+    store = EvidenceStore()
+    old = passage(CHUNK_A, "The RPO in v2 is 5 minutes. " + "padding " * 60)
+    new, _ = store.add_passages([old.model_dump(mode="json")])
+    head = [Message(role="system", content="s"), Message(role="user", content="q")]
+    shown = Message(role="tool", content=store.render_passages(new, []))
+    turns = [
+        Message(
+            role="assistant", tool_calls=[ToolCall(id="0", name="document_search", arguments={})]
+        ),
+        shown,
+    ]
+    for i in range(1, 4):
+        turns.append(
+            Message(role="assistant", tool_calls=[ToolCall(id=str(i), name="t", arguments={})])
+        )
+        turns.append(Message(role="tool", content="x" * 300))
+    out = bound_history([*head, *turns], max_chars=1200, recap=store.recap)
+    note = out[2].content
+    assert "omitted" in note and '<recap id="S1"' in note and "RPO in v2 is 5 minutes" in note
+    assert all(m is not shown for m in out)  # the full turn itself was dropped
+    assert sum(len(m.content) for m in out) < 1200 + 400
+
+
 # --- regressions from the M3 milestone review ---------------------------------------------------
 
 
@@ -415,3 +439,16 @@ async def test_fenced_json_content_is_accepted_as_final() -> None:
     loop, _, _ = make_loop(script(fenced))
     result = await loop.run(make_ctx(), "?")
     assert result.status == "insufficient_evidence" and result.corrections == {}
+
+
+def test_a_stopped_run_keeps_the_sources_it_had_gathered() -> None:
+    from app.agents.result import build_result
+
+    ctx = ExecutionContext(tenant_id="t", limits=ExecutionLimits(), allowed_tools=frozenset())
+    store = EvidenceStore()
+    store.add_passages([passage(CHUNK_A, "RPO is 5 minutes.").model_dump(mode="json")])
+    ctx.evidence = store
+    cancelled = build_result(ctx, "loop", EvidenceStore(), "cancelled", error_code="x")
+    assert [c.source_id for c in cancelled.citations] == ["S1"]
+    answered = build_result(ctx, "loop", store, "answered", final=FinalAnswer(answer="none"))
+    assert answered.citations == []  # answered runs list only what they cite

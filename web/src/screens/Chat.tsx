@@ -64,7 +64,7 @@ function CaseRecord({ c }: { c: Case }) {
   const r = c.result;
   return (
     <article className="animate-sign">
-      <header className="flex flex-wrap items-baseline gap-x-4 gap-y-2 border-b-1.5 border-ink px-8 pb-4 pt-7">
+      <header className="flex flex-wrap items-baseline gap-x-4 gap-y-2 border-b-1.5 border-ink px-4 sm:px-8 pb-4 pt-7">
         {c.executionId ? <RecordId prefix="EX" id={c.executionId} invert /> : <Spinner />}
         <h1 className="min-w-0 flex-1 text-2xl font-bold">{c.question}</h1>
         <span className="font-mono text-xs text-ink-2">{c.mode}</span>
@@ -74,7 +74,7 @@ function CaseRecord({ c }: { c: Case }) {
         live={c.running}
         final={r ? { status: r.status, verification: r.verification, totalMs: r.total_ms } : null}
       />
-      <div className="grid gap-x-10 gap-y-8 px-8 py-7 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid gap-x-10 gap-y-8 px-4 sm:px-8 py-7 xl:grid-cols-[minmax(0,1fr)_380px]">
         <section aria-label="Answer" className="min-w-0">
           {r ? (
             <>
@@ -212,18 +212,18 @@ export default function Chat({ openId }: { openId?: string }) {
     <div className="flex min-h-full flex-col">
       <div className="flex-1">
         {openError ? (
-          <div className="px-8 pt-8">
+          <div className="px-4 sm:px-8 pt-8">
             <ErrorBox error={openError} />
           </div>
         ) : null}
         {shown ? (
           <CaseRecord key={current} c={shown} />
         ) : openId && !openError ? (
-          <div className="px-8 pt-10">
+          <div className="px-4 sm:px-8 pt-10">
             <Spinner />
           </div>
         ) : (
-          <div className="mx-auto max-w-3xl px-8 pb-10 pt-16">
+          <div className="mx-auto max-w-3xl px-4 sm:px-8 pb-10 pt-16">
             <h1 className="text-3xl font-extrabold">Ask your documents.</h1>
             <p className="mt-2 max-w-xl text-lg text-ink-2">
               Every answer comes back as a record: each step signed by the model or tool that took it, sealed with its
@@ -249,7 +249,7 @@ export default function Chat({ openId }: { openId?: string }) {
           </div>
         )}
         {earlier.length > 0 && (
-          <section className="px-8 pb-8" aria-label="Earlier cases this session">
+          <section className="px-4 sm:px-8 pb-8" aria-label="Earlier cases this session">
             <h2 className="border-b-1.5 border-ink pb-2 text-md font-bold">Earlier this session</h2>
             <ul className="divide-y divide-rule">
               {earlier.map(({ c, i }) => (
@@ -268,7 +268,7 @@ export default function Chat({ openId }: { openId?: string }) {
       </div>
 
       <form
-        className="sticky bottom-0 z-10 border-t-1.5 border-ink bg-ground px-8 py-4"
+        className="sticky bottom-0 z-10 border-t-1.5 border-ink bg-ground px-4 sm:px-8 py-4"
         onSubmit={(e) => {
           e.preventDefault();
           void ask(question);

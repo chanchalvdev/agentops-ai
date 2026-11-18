@@ -116,13 +116,21 @@ export interface Execution {
   finished_at: string | null;
 }
 
+/** What the Approvals screen shows once a decided run has resumed and finished. */
+export interface Resumed {
+  execution_id: string;
+  status: string;
+  answer: string;
+  total_ms: number | null;
+}
+
 export interface Approval {
   id: string;
   execution_id: string;
   call_id: string;
   tool_name: string;
   arguments: Record<string, unknown>;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approved" | "rejected" | "expired";
   reason: string | null;
   created_at: string;
   decided_at: string | null;

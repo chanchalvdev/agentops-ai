@@ -6,6 +6,7 @@ production code.
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -53,7 +54,10 @@ from app.tools.document_search import DocumentSearch
 from app.tools.registry import ToolRegistry
 from app.tools.workspace import workspace_tools
 from app.workspace.audit import DbAudit
+from app.workspace.executor import DockerSandbox
 from app.workspace.jail import WorkspaceManager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -79,6 +83,7 @@ class Services:
     telemetry: Telemetry
     rate_limiter: RateLimiter
     eval_task: "asyncio.Task[Any] | None" = None  # the one evaluation run allowed at a time
+    _indexer: "asyncio.Task[None] | None" = None
     _graph: GraphRunner | None = None
     _pool: AsyncConnectionPool[Any] | None = None
 
@@ -120,7 +125,33 @@ class Services:
             tuning=AgentTuning.from_settings(self.settings),
         )
 
+    def start_indexing_worker(self) -> None:
+        """Durable indexing: periodically claim documents nobody finished (see
+        IngestionService.pending_work). Uploads still start indexing at once in their own
+        request; this only recovers what a crash or restart left behind."""
+        if self._indexer is not None or not self.settings.indexing_worker_enabled:
+            return
+
+        async def loop() -> None:
+            poll = self.settings.indexing_poll_s
+            while True:
+                try:
+                    for document_id in await self.ingestion.pending_work(grace_s=poll):
+                        await self.ingestion.process_document(document_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("indexing worker iteration failed")
+                await asyncio.sleep(poll)
+
+        self._indexer = asyncio.create_task(loop(), name="indexing-worker")
+
     async def aclose(self) -> None:
+        if self._indexer is not None:
+            self._indexer.cancel()  # a document mid-index keeps its lease and is reclaimed later
+            await asyncio.gather(self._indexer, return_exceptions=True)
+        if self._graph is not None:
+            await self.agents.aclose()  # in-flight approval resumes end as "cancelled"
         if self.eval_task is not None and not self.eval_task.done():
             self.eval_task.cancel()  # the run row is marked failed by the runner's finally
             await asyncio.gather(self.eval_task, return_exceptions=True)
@@ -240,6 +271,14 @@ def build_services(
         max_write_bytes=settings.workspace_max_write_bytes,
         exec_timeout_s=settings.workspace_exec_timeout_s,
         max_output_bytes=settings.workspace_max_output_bytes,
+        sandbox=DockerSandbox(
+            image=settings.workspace_sandbox_image,
+            cpus=settings.workspace_sandbox_cpus,
+            memory=settings.workspace_sandbox_memory,
+        )
+        if settings.workspace_exec_backend == "docker"
+        else None,
+        receipt_ttl_s=settings.workspace_receipt_ttl_s,
     )
     tools = ToolRegistry(
         [
