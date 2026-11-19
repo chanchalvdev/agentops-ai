@@ -9,6 +9,11 @@ framework with a 38-case golden dataset and a CI-style regression gate, measured
 optimizations behind a quality gate, drift monitoring with persisted alerts, per-tenant rate
 limiting, a Docker image, and a React web UI that drives all of it through the public API.
 
+**Use cases**: cited Q&A over internal docs, version comparison, on-call runbook help, agent file
+edits countersigned by a human, sandboxed test runs, injection-resistant ingestion, multi-tenant
+deployment, evaluation gates and drift monitoring, auditing. Walkthroughs with commands:
+[docs/use-cases.md](docs/use-cases.md).
+
 - Product spec: [product.txt](product.txt) · Architecture: [docs/architecture/system-design.png](docs/architecture/system-design.png)
 - Animated end-to-end flows: [docs/architecture/system-flow.gif](docs/architecture/system-flow.gif)
   (regenerate: `uv run --with pillow python docs/architecture/render_flow_gif.py`)
@@ -34,6 +39,7 @@ uv run alembic upgrade head                      # create the schema
 
 uv run agentops ingest datasets/corpus           # index the synthetic sample corpus
 uv run agentops search "how long are transaction records kept"
+uv run agentops reindex                          # after changing chunking/embedding settings
 uv run agentops ask "What is the RPO in v2 and how does it differ from v1?"
 uv run agentops run "What is the RPO in the latest payments architecture, in seconds?" --trace
 uv run agentops run "..." --mode loop            # the hand-written agent loop instead of the graph
@@ -49,6 +55,10 @@ uv run agentops drift check                      # quality/retrieval/data/operat
 uv run agentops metrics --hours 24               # latency, errors, retries, tokens, cost
 
 uv run uvicorn --factory app.main:create_app --port 8000   # API + docs at http://localhost:8000/docs
+
+# optional: run workspace commands in a locked-down container instead of on the host
+docker build -t agentops-sandbox:1 -f docker/sandbox.Dockerfile docker
+AGENTOPS_WORKSPACE_EXEC_BACKEND=docker uv run uvicorn --factory app.main:create_app --port 8000
 
 cd web && npm install && npm run dev             # web UI at http://localhost:5173 (key: dev-key-tenant-a)
 scripts/demo.sh                                  # the end-to-end demo through the API (APPROVE=1 to approve)
@@ -75,22 +85,23 @@ curl -N -H "$H" -H 'content-type: application/json' localhost:8000/api/v1/agent/
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health`, `/ready` | Liveness; readiness checks DB, Ollama, and that configured models are installed |
-| POST | `/api/v1/documents` | Upload TXT/MD/PDF (+ optional flat JSON `metadata`). 202 + background indexing; 200 if identical content exists |
+| POST | `/api/v1/documents` | Upload TXT/MD/PDF (+ optional flat JSON `metadata`). 202 + indexing (durable: a crashed indexer's work is reclaimed); 200 if identical content exists (an older version's bytes become latest again; a failed document is queued again) |
 | GET | `/api/v1/documents`, `/api/v1/documents/{id}` | List (paginated, `status` filter) / fetch |
 | GET | `/api/v1/documents/{id}/chunks/{chunk_id}` | One source passage: what a citation points at (404 across tenants) |
-| DELETE | `/api/v1/documents/{id}` | Delete document and its chunks |
-| POST | `/api/v1/documents/{id}/reindex` | Re-chunk and re-embed with the current configuration |
+| DELETE | `/api/v1/documents/{id}` | Delete one version and its chunks; deleting the latest version makes the previous indexed one latest again |
+| POST | `/api/v1/documents/{id}/reindex` | Re-chunk and re-embed with the current configuration; the current index keeps serving until the new one is committed |
 | POST | `/api/v1/retrieval/search` | `vector` / `keyword` / `hybrid` search with per-result ranks and timing |
 | POST | `/api/v1/rag/answer` | Non-agentic baseline: retrieve, answer, validate citations |
 | POST | `/api/v1/llm/chat` | Direct bounded model call with usage, cost, latency, attempts |
 | GET | `/api/v1/models` | Model per role and whether it is installed |
 | POST | `/api/v1/agent/run` | Run the agent (`mode`: `graph` default, or `loop`); `limits` may only tighten server defaults |
-| POST | `/api/v1/agent/run/stream` | Same, as Server-Sent Events: `start`, `step`, `model_call`, `tool_call`, `correction`, `approval`, `citation`, `final` |
+| POST | `/api/v1/agent/run/stream` | Same, as Server-Sent Events: `start`, `step`, `model_call`, `tool_call`, `correction`, `approval`, `citation`, `final`. Ledger events carry `id: <seq>`; after a disconnect the run continues for `AGENTOPS_SSE_RECONNECT_GRACE_S` (30 s) |
+| GET | `/api/v1/executions/{id}/stream` | Reconnect with `Last-Event-ID`: replays what was missed, then continues live (or closes with the stored outcome) |
 | GET | `/api/v1/executions?limit=&status=` | The caller's most recent executions, newest first |
 | GET | `/api/v1/executions/{id}` | Stored execution: status, answer, citations, counters, tokens, limits |
 | GET | `/api/v1/executions/{id}/trace` | The execution ledger: every model call, tool call, rejection, and decision |
-| GET | `/api/v1/approvals?status=pending` | Tool calls paused for a human decision |
-| POST | `/api/v1/approvals/{id}/approve` · `/reject` | Decide once (409 afterwards); resumes the graph from its Postgres checkpoint |
+| GET | `/api/v1/approvals?status=pending` | Tool calls paused for a human decision (`approved`, `rejected`, `expired`, `all`) |
+| POST | `/api/v1/approvals/{id}/approve` · `/reject` | Decide once (409 afterwards). 202 + `Location` of the execution, which resumes from its Postgres checkpoint in the background; `?wait=true` blocks and returns the result |
 | GET | `/api/v1/workspace/tree?path=` · `/file?path=` · `/search?q=` | Browse, read, and search the tenant's workspace (needs `workspace:read`) |
 | PUT | `/api/v1/workspace/file` | User-initiated write; same path jail (needs `workspace:write`) |
 | POST | `/api/v1/workspace/exec` | Allowlisted command, `argv` or a `line` (no shell); write/exec commands need `workspace:exec` |
@@ -99,7 +110,8 @@ curl -N -H "$H" -H 'content-type: application/json' localhost:8000/api/v1/agent/
 | POST | `/api/v1/evaluations/run` | 202 + run id; runs a dataset from `datasets/` in the background (one at a time) |
 | GET | `/api/v1/evaluations/runs` · `/runs/{id}` · `/compare?base=&head=` | Stored runs, per-case results, regression comparison |
 | GET | `/api/v1/metrics?hours=24` | The caller's own operational metrics: success/timeout/failure rates, p50/p95, tokens, retries, cache hits, cost |
-| GET | `/api/v1/monitoring/summary` · `/drift` · `/alerts` | Latest drift check, alert history, platform metrics |
+| GET | `/api/v1/monitoring/summary` · `/drift` · `/alerts?status=open` | Latest drift check, alerts (`open` / `acknowledged`), platform metrics |
+| POST | `/api/v1/monitoring/alerts/{id}/acknowledge` | Mark an alert as seen (who, when, note); it stays on record |
 | POST | `/api/v1/monitoring/check` | Run a drift check now and persist it with its alerts |
 | GET · POST | `/api/v1/experiments` · `/experiments/run` | List profiles; run one (retrieval: 200 + report, agent: 202 + run id) |
 
@@ -114,9 +126,11 @@ Errors always look like `{"error": {"code", "message", "request_id"}}`; validati
 
 ```
 upload ─► validate (size, extension, magic bytes, UTF-8) ─► extract (PDF pages kept as \f) ─► normalize
-       ─► store (idempotent on tenant+sha256, versioned by filename) ─► 202
-background ─► chunk (structured: paragraph/heading-aware, or fixed) ─► embed ("search_document:" prefix)
-           ─► one transaction: replace chunks + mark READY + demote older versions   (else FAILED, 0 chunks)
+       ─► store as PENDING (idempotent on tenant+sha256, versioned by filename) ─► 202
+indexer ─► claim (atomic UPDATE: PENDING, or PROCESSING with an expired lease) ─► heartbeat the lease
+        ─► chunk (structured: paragraph/heading-aware, or fixed) ─► embed ("search_document:" prefix)
+        ─► one transaction: replace chunks + READY + searchable + demote older versions
+           (failure: a new document becomes FAILED with 0 chunks; a reindexed one keeps its old index)
 
 query ─► embed ("search_query:") ─► pgvector HNSW cosine  ┐
       ─► websearch_to_tsquery (AND→OR, -negations as NOT) + ts_rank_cd       ┴► RRF (k=60) ─► dedupe ─► top-k
@@ -129,6 +143,12 @@ Key decisions (details in [docs/journal/](docs/journal/)):
 - **Tenant isolation in one place**: every retriever builds on `scoped_select`, which filters both
   the chunk and its document by tenant. Cross-tenant reads return 404, not 403.
 - **Never silently partial**: chunks and the READY flag commit in one transaction.
+- **Durable indexing without a broker**: the documents table is the queue. The upload request
+  starts indexing at once; a worker in the API process (`AGENTOPS_INDEXING_*`) reclaims anything
+  left `pending` or `processing` past its lease (crash, restart), and gives up after
+  `AGENTOPS_INDEXING_MAX_ATTEMPTS`. Concurrent claimants (request task, worker, CLI) index once.
+- **Available during change**: retrieval serves `searchable` documents, so a reindex never takes
+  a document offline, and a failed reindex leaves the previous index serving (with the error).
 - **RRF over score blending**: cosine similarity and `ts_rank_cd` live on incomparable scales.
 - **No evidence, no model call**: cheaper and cannot hallucinate. It fires for empty tenants,
   filters matching nothing, and (only if `AGENTOPS_RETRIEVAL_MIN_VECTOR_SCORE` is set) when every
@@ -177,8 +197,15 @@ grants `tenant_a`, set `AGENTOPS_WORKSPACE_TENANTS` otherwise). Enforced in
   `python -m pytest`, `pytest` (collection runs code), `git add`, `mkdir`.
 - **Writes** (`workspace_write`, `workspace_edit`) always pause at `human_approval`; approved
   writes carry an idempotency receipt, and repeating the last side-effecting call is refused.
-- **Not an OS sandbox**: an approved `pytest` runs workspace code with the server's privileges.
-  The approval is the control; production would add a container or VM.
+- **Container sandbox** (`AGENTOPS_WORKSPACE_EXEC_BACKEND=docker`): every command runs in a
+  throwaway container from [docker/sandbox.Dockerfile](docker/sandbox.Dockerfile) with no network,
+  all capabilities dropped, `no-new-privileges`, a read-only root filesystem, CPU/memory/PID
+  limits, a non-root user, and only the tenant's directory mounted. Verified by
+  [tests/security/test_docker_sandbox.py](tests/security/test_docker_sandbox.py): workspace code
+  cannot reach the network, host files, or server secrets, and a timed-out command leaves no
+  container behind. The default `host` backend runs with the server's privileges behind approval.
+- **Terminal**: commands share the HTTP `workspace` rate limit; a client that disconnects kills
+  its running command at once; a frame sent while a command runs gets a `busy` error.
 
 ### Observability
 
@@ -263,6 +290,11 @@ which is why answer coverage exists.
   `workspace`), configurable via `AGENTOPS_RATE_LIMIT_*`; 429 with `Retry-After`.
 - Operator-only evaluation, experiment, and monitoring APIs; profiles can override only an
   allowlisted set of settings, and a profile that changes chunking must use its own eval tenant.
+- Approvals expire after `AGENTOPS_APPROVAL_TTL_S` (24 h; the run ends `cancelled`,
+  `approval_expired`); a decision whose resume died with its process is reopened after
+  `AGENTOPS_APPROVAL_RESUME_GRACE_S`; the paused state and its approval are written in one
+  transaction; checkpoints are deleted when a run ends.
+- One evaluation run at a time across processes (Postgres advisory lock), not only per process.
 - `Dockerfile`: non-root, `uv sync --frozen --no-dev`, healthcheck, migrations on start.
   `docker compose --profile app up -d` runs the API against Ollama on the host
   (`AGENTOPS_OLLAMA_BASE_URL_FROM_DOCKER`, default `http://host.docker.internal:11434`). Ollama
@@ -283,9 +315,12 @@ backend needs no CORS configuration.
 | Chat | Streams the run over SSE: each step, model call, tool call, and approval as it happens; the answer with clickable `[S1]`/`[T1]` citations that open the source passage or tool result; graph or loop mode |
 | Documents | Upload (with optional metadata), status while indexing, reindex, delete |
 | Workspace | File tree, viewer/editor (your own writes), a terminal over the same sandboxed executor (refusals shown in red), and the audit log |
-| Approvals | Pending writes and commands with a diff preview against the current file; approve or reject with a reason; the resumed run's answer |
+| Approvals | Pending writes and commands with a diff preview against the current file; approve or reject with a reason; the resumed run's answer (polled after the 202) |
 | Executions | Recent runs and a per-run timeline from the ledger: steps, model and tool calls, latency bars, tokens, cache hits |
-| Evaluations & Monitoring | Operator only: runs, per-category and per-evaluator scores, failing cases, baseline comparison with the regression gate, drift status with signals, alerts, and "run check now" |
+| Evaluations & Monitoring | Operator only: runs, per-category and per-evaluator scores, failing cases, baseline comparison with the regression gate, drift status with signals, alerts with "acknowledge", and "run check now" |
+
+The chat stream reconnects by itself after a dropped connection (Last-Event-ID). The layout
+works down to phone width (a top bar replaces the sidebar; wide tables scroll).
 
 ```bash
 cd web
@@ -333,40 +368,24 @@ reported as `0` with `pricing_source: "local"`; hosted models without a configur
 
 ## Known limitations
 
-- Background indexing uses FastAPI `BackgroundTasks` (in-process): a crash mid-indexing leaves the
-  document `processing`. A durable queue is a later hardening step.
+- Rate limits and caches are in-process: with several API replicas each has its own buckets and
+  caches (Redis would be the next step).
+- No login of its own: the API key is the credential (the web UI keeps it in browser local
+  storage). Workspace permissions are all-or-nothing per tenant.
+- Scanned PDFs (no text layer) are rejected; there is no OCR. Changing the embedding model's
+  dimension needs a migration and `agentops reindex`.
 - The vector relevance floor is off by default (see above); weak nearest neighbours still reach
   the model, which must then report `insufficient_evidence` itself.
-- Scanned PDFs (no text layer) are rejected; there is no OCR.
-- Changing the embedding model's dimension needs a migration and a full reindex.
-- Web UI: no login of its own (the API key is the credential, kept in browser local storage);
-  one terminal command at a time (not a PTY); the approval preview diffs against the file's
-  first 20 KB when it is larger; no mobile layout.
-- An evaluation run whose process is killed (e.g. the machine sleeps) is only marked `failed`
-  after `AGENTOPS_EVAL_STALE_AFTER_S` (default 4 h; there is no progress heartbeat), when runs are
-  listed or a new run starts.
-- The drift check's default "current" runs are the latest ones made under the server's own
-  configuration; experiment runs (any profile, e.g. `degraded-chunking`) are only compared when
-  passed explicitly.
-- The containerised API (`docker compose --profile app`) has been verified to start, migrate, and
-  reach the database; on macOS it cannot reach an Ollama that listens on loopback only, so the
-  demo has been run end to end with the API outside Docker.
-- Rate limits and caches are in-process: with several API replicas each has its own buckets and
-  caches (Redis would be the next step). The workspace WebSocket terminal is not rate limited.
-- Indexing is fail-closed: a document is unsearchable while reindexing, a failed reindex drops its
-  previous chunks, and deleting the latest version does not re-promote the previous one.
-- Re-uploading an older version's exact bytes returns that document as a duplicate; it does not
-  become latest again (call reindex). The same applies to a FAILED document's bytes.
-- Agent latency on the M4 is 30–90 s per graph run (more under memory pressure). See
-  [docs/benchmarks/day4.md](docs/benchmarks/day4.md) for what routing and caching changed.
-- The loop's answers are grounded but sometimes incomplete (it answered "5 minutes" without the
-  requested seconds conversion in 2 of 4 live runs). The Day 3 evaluation set measures this.
-- A pending approval is resumed through the API or `agentops approve`; there is no expiry or
-  notification yet.
-- Workspace: not an OS sandbox (see above); permissions are all-or-nothing per tenant; receipts
-  are never cleaned up; the terminal is one command at a time, not a PTY.
-- After a failed first attempt and a successful retry, qwen3:8b sometimes reports the workspace
-  action as failed (caught by the `ws-edit-approved` eval case); still open.
+- The terminal is one command at a time, not a PTY; the approval preview diffs against the
+  file's first 20 KB when it is larger.
+- A streamed run can only be re-followed live by the API process that started it (in another
+  process, reconnecting replays the stored outcome once it has finished).
+- The docker exec backend needs a Docker daemon next to the API; it is not enabled inside the
+  `docker compose --profile app` container (that would mean mounting the Docker socket).
+- Agent latency on the M4 is 25–90 s per graph run (more under memory pressure); see
+  [docs/benchmarks/day4.md](docs/benchmarks/day4.md).
+- The custom loop is kept as a teaching baseline: qwen3:8b often answers in prose before
+  `final_answer` ([docs/benchmarks/loop-vs-graph.md](docs/benchmarks/loop-vs-graph.md)); use the graph.
 - LLM-judge scores come from the same local model family that wrote the answers: advisory only.
 - Live results (golden-v1, graph, qwen3:8b): baseline 33/38 (87%), `optimized` 36/38 (95%; tool
   use 2/5 → 5/5). Still failing: `multi-retention` and `ws-edit-approved`.

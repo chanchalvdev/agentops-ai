@@ -92,6 +92,11 @@ class EvaluationRunner:
             doc, created = await self.s.ingestion.create_document(
                 self.tenant, f.name, f.read_bytes(), {"source": "eval-corpus"}
             )
+            if not created and doc.chunking_config != self.s.ingestion.chunking_config.key:
+                # Indexed under other chunking settings (another profile, or before a config
+                # change): evaluating against it would measure the wrong configuration.
+                await self.s.ingestion.mark_for_reindex(self.tenant, doc.id)
+                created = True
             if created:
                 await self.s.ingestion.process_document(doc.id)
         return len(files)

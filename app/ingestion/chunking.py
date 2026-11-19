@@ -170,7 +170,21 @@ def _structured(text: str, cfg: ChunkingConfig) -> list[Chunk]:
             current, new_from = carry, len(carry)
         current.append(unit)
     flush()
+    _absorb_trailing_runt(spans, cfg)
     return _to_chunks(text, spans)
+
+
+def _absorb_trailing_runt(spans: list[tuple[int, int, str | None]], cfg: ChunkingConfig) -> None:
+    """A short final section (a heading starts a new chunk once the current one is half full)
+    became a tiny chunk of its own, which ranks poorly: in the golden set, v2's two-sentence
+    "Open Risks" section (265 chars) ranked 6th for the question it answers. Merge a final
+    chunk under a quarter of the size into the previous one when the result still fits."""
+    if len(spans) < 2:
+        return
+    (ps, pe, plabel), (ls, le, llabel) = spans[-2], spans[-1]
+    if le - ls < cfg.size // 4 and le - ps <= cfg.size and ls >= pe - cfg.overlap:
+        labels = dict.fromkeys(x for x in (plabel, llabel) if x)
+        spans[-2:] = [(ps, le, " | ".join(labels)[:500] or None)]
 
 
 def _fixed(text: str, cfg: ChunkingConfig) -> list[Chunk]:

@@ -327,3 +327,44 @@ async def test_unparseable_answer_uses_invalid_output_corrections() -> None:
     runner, _, _ = make_runner(model)
     result = await runner.run(make_ctx(), "?")
     assert result.status == "answered" and result.corrections == {"invalid_output": 1}
+
+
+def test_locate_figures_points_at_the_passage_that_states_a_rejected_figure() -> None:
+    from app.agents.evidence import EvidenceStore
+    from app.agents.nodes import locate_figures
+
+    store = EvidenceStore()
+    base = {"document_id": "d1", "filename": "v1.md", "document_version": 1}
+    store.add_passages(
+        [
+            {**base, "chunk_id": "c1", "text": "Overview: a Java monolith."},
+            {**base, "chunk_id": "c2", "text": "Availability target: 99.9% monthly."},
+        ]
+    )
+    claim = "The availability target for v1 is 99.9% monthly [S1]"
+    assert locate_figures([claim], store, {"S1"}) == '"99.9%" appears in S2'
+    assert locate_figures(["No figures here [S1]"], store, {"S1"}) == ""
+
+
+def test_complete_citations_attaches_the_passage_that_states_a_figure() -> None:
+    from app.agents.evidence import EvidenceStore, FinalAnswer
+    from app.agents.nodes import complete_citations
+
+    store = EvidenceStore()
+    v1 = {"document_id": "d1", "filename": "v1.md", "document_version": 1}
+    v2 = {"document_id": "d2", "filename": "v2.md", "document_version": 1}
+    store.add_passages(
+        [
+            {**v1, "chunk_id": "a", "text": "v1 overview: a Java monolith."},
+            {**v1, "chunk_id": "b", "text": "Availability target: 99.9% monthly."},
+            {**v2, "chunk_id": "c", "text": "Availability target: 99.95% monthly."},
+        ]
+    )
+    draft = FinalAnswer(answer="v1 targets 99.9% [S1]; v2 targets 99.95% [S3].", citations=["S1"])
+    completed, added = complete_citations(draft, store)
+    assert added == ["S2"] and completed.citations == ["S1", "S2"]
+    assert completed.answer == "v1 targets 99.9% [S2] [S1]; v2 targets 99.95% [S3]."
+    ok = FinalAnswer(answer="v1 targets 99.9% [S2].", citations=["S2"])
+    assert complete_citations(ok, store) == (ok, [])
+    insufficient = FinalAnswer(answer="n/a", insufficient_evidence=True)
+    assert complete_citations(insufficient, store) == (insufficient, [])

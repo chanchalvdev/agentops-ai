@@ -1,7 +1,9 @@
 """LangGraph nodes. Each one does a single job and goes through the harness for every model or
 tool call, so graph routing can never bypass budgets, permissions, or deadlines."""
 
+import json
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
@@ -11,6 +13,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
 from app.agents.evidence import (
+    CITATION_MARKER,
     EvidenceStore,
     FinalAnswer,
     cited_labels,
@@ -25,7 +28,7 @@ from app.llm.schemas import LLMRequest, Message, ModelRole, ToolCall
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "agent-graph-v4"
+PROMPT_VERSION = "agent-graph-v5"
 # Workspace tasks read, then edit, then check: each round is one model call plus its tool calls.
 MAX_TOOL_ROUNDS = 4
 UNTRUSTED = (
@@ -56,6 +59,9 @@ nothing more is needed. {UNTRUSTED}"""
 ANSWER_PROMPT = f"""Answer the question using ONLY the evidence and tool results provided.
 - Cite every factual claim inline with its ID, like [S1] or [T1]. Use only IDs shown below.
 - If the evidence does not contain the answer, set insufficient_evidence to true.
+- Questions asking for a conflict, difference, or change: if the evidence states the facts being
+  compared, answer by stating them side by side with citations, even when no source uses the
+  question's word ("conflict", "difference"). That is an answer, not insufficient evidence.
 - For actions on the user's workspace, the tool results ARE the evidence: say what was done or
   rejected and cite those results. insufficient_evidence is only for unanswerable questions.
 - Quote numbers exactly as written. Be concise. {UNTRUSTED}"""
@@ -71,7 +77,8 @@ INSUFFICIENT_TEXT = "Your documents do not contain enough information to answer 
 
 VERIFY_PROMPT = f"""You check whether an answer is supported by its cited sources.
 supported is true only if every factual claim in the answer is stated in, or follows directly
-from, the cited sources. List any unsupported claims. {UNTRUSTED}"""
+from, the cited sources. In unsupported_claims, quote each unsupported claim from the answer
+word for word; do not explain or describe the sources. {UNTRUSTED}"""
 
 
 class Classification(BaseModel):
@@ -153,6 +160,38 @@ async def _structured[M: BaseModel](
     except ValidationError:
         deps.ctx.record("model_call", name, "error", error_code="invalid_model_output")
         return None
+
+
+_WRITE_TOOLS = ("workspace_write", "workspace_edit")
+
+
+def workspace_outcome(store: EvidenceStore) -> str:
+    """What the run actually changed, computed from the tool results rather than left to the
+    model. Live eval (ws-edit-approved): an edit failed once ("old text not found"), was retried
+    and applied, and qwen3:8b still reported "could not be completed" from the first error.
+    Stating the final per-file outcome makes the retry's success unambiguous."""
+    final: dict[str, tuple[str, str]] = {}  # path -> (label, "applied" | error code)
+    failed: list[tuple[str, str]] = []
+    for label, ref in store.tool_results.items():
+        if ref.tool not in _WRITE_TOOLS:
+            continue
+        path = str(ref.output.get("path", ""))
+        if "error" in ref.output:
+            failed.append((label, str(ref.output["error"])))
+        elif path:
+            final[path] = (label, str(ref.output.get("outcome", "applied")))
+    if not final and not failed:
+        return ""
+    lines = [f"- {path}: changed ({state}) [{label}]" for path, (label, state) in final.items()]
+    if final and failed:
+        lines.append(
+            "- Earlier attempts "
+            + ", ".join(f"[{label}] ({code})" for label, code in failed)
+            + " failed, but a later retry succeeded: the change WAS made. Do not report failure."
+        )
+    elif failed:
+        lines.append("- No change was made: every write attempt failed.")
+    return "\n\nVerified workspace outcome (computed from the tool results):\n" + "\n".join(lines)
 
 
 def _evidence_block(store: EvidenceStore) -> str:
@@ -423,9 +462,13 @@ async def generate_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
             insufficient_evidence=True,
         )
         return {"draft": draft.model_dump(), "findings": [], "status": "insufficient_evidence"}
+    outcome = workspace_outcome(store) if state.get("intent") == "workspace_task" else ""
     messages = [
         Message(role="system", content=ANSWER_PROMPT),
-        Message(role="user", content=f"{_evidence_block(store)}\n\nQuestion: {state['question']}"),
+        Message(
+            role="user",
+            content=f"{_evidence_block(store)}{outcome}\n\nQuestion: {state['question']}",
+        ),
     ]
     feedback = state.get("feedback") or []
     if feedback:
@@ -437,7 +480,11 @@ async def generate_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
             Message(
                 role="user",
                 content=f"Rejected: {'; '.join(feedback)}. Valid IDs: {sorted(store.labels)}. "
-                "Return corrected JSON that cites the IDs supporting each claim.",
+                # Live eval (multi-retention): the draft was right but cited the wrong passage;
+                # told only "unsupported", the model gave up with insufficient_evidence.
+                "A claim is often stated in a different source than the one you cited: find the "
+                "source that states each claim and cite that one. Set insufficient_evidence only "
+                "if no source states it. Return corrected JSON.",
             ),
         ]
     # Simple single-fact lookups may be drafted by the small model. verify_answer still runs on
@@ -471,6 +518,20 @@ async def generate_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
         # For an action the tool results ARE the outcome, so the flag is forced off and the
         # report goes through citation validation and entailment verification instead.
         insufficient = False
+    if insufficient and not feedback and CITATION_MARKER.search(grounded.answer):
+        # Contradictory output: "insufficient" plus a cited answer. Live eval (tool-rto-diff,
+        # 2026-11-19): a correct, calculator-backed "45 minutes [T1]" came with the flag set.
+        # Ask once to resolve it; a real answer then goes through verification, and a second
+        # contradictory draft is taken as insufficient (never returned unverified).
+        return {
+            **update,
+            "draft": None,
+            "findings": [
+                "contradictory output: insufficient_evidence is true but the answer states "
+                "cited facts. If the cited sources state them, set insufficient_evidence to "
+                "false and keep the citations; otherwise make no claims"
+            ],
+        }
     draft = FinalAnswer(
         answer=INSUFFICIENT_TEXT if insufficient else grounded.answer,
         citations=[] if insufficient else grounded.citations,
@@ -485,7 +546,10 @@ async def validate_citations(state: AgentState, deps: GraphDeps) -> dict[str, An
         return {}  # generate_answer already found the draft unusable
     store = EvidenceStore.from_state(state.get("evidence"))
     draft = FinalAnswer.model_validate(state["draft"])
-    return {"findings": validate_final(draft, store)}
+    completed, added = complete_citations(draft, store)
+    if added:
+        deps.ctx.record("policy", "citation_completion", "ok", data={"added": added})
+    return {"findings": validate_final(completed, store), "draft": completed.model_dump()}
 
 
 @node("verify_answer")
@@ -515,10 +579,85 @@ async def verify_answer(state: AgentState, deps: GraphDeps) -> dict[str, Any]:
     if result.supported:
         return {"verification": "supported"}
     claims = "; ".join(result.unsupported_claims[:3]) or "unspecified claims"
+    checked = ", ".join(sorted(set(cited.passages) | set(cited.tool_results), key=_label_key))
+    uncited = sorted(store.labels - set(labels), key=_label_key)
+    hints = locate_figures(result.unsupported_claims[:3], store, set(labels))
     return {
         "verification": "unsupported",
-        "findings": [f"claims not supported by the cited sources: {claims}"],
+        # The checker only sees the cited sources, but words its verdict as if about all the
+        # evidence ("the evidence does not mention v2's retention"); the reviser then believed it
+        # and gave up (live, multi-retention). Say exactly what was and was not checked.
+        "findings": [
+            f"the sources you cited ({checked}) do not support: {claims}. The checker did not "
+            f"see the sources you did not cite ({', '.join(uncited) or 'none'}); one of them may "
+            "state the claim" + (f". {hints}" if hints else "")
+        ],
     }
+
+
+_FIGURE = re.compile(r"\d[\d,.]*\s?(?:%|ms|s\b|seconds|minutes|hours|days|years|million)?")
+
+
+def locate_figures(claims: list[str], store: EvidenceStore, cited: set[str]) -> str:
+    """Where the specific figures of a rejected claim actually appear, found by string match in
+    code. Live eval (multi-availability, 2026-11-19): the answer cited v1's overview [S1] for
+    "99.9%", which is in v1's availability passage [S4]; the verifier rejected it three times
+    and the model, at temperature 0, re-sent the same citation each time. The hint is only a
+    pointer: the revised answer is verified again like any other."""
+    found: dict[str, list[str]] = {}
+    for claim in claims:
+        for figure in dict.fromkeys(
+            m.group().strip().rstrip(".,") for m in _FIGURE.finditer(claim)
+        ):
+            if len(figure) < 2:
+                continue
+            where = [
+                label
+                for label in sorted(store.passages, key=_label_key)
+                if label not in cited and figure in str(store.passages[label]["text"])
+            ]
+            if where:
+                found[figure] = where
+    return "; ".join(
+        f'"{figure}" appears in {", ".join(where)}' for figure, where in list(found.items())[:4]
+    )
+
+
+def complete_citations(draft: FinalAnswer, store: EvidenceStore) -> tuple[FinalAnswer, list[str]]:
+    """Attach the passage that states a figure the answer uses but none of its citations
+    contain. Live eval (multi-availability, 2026-11-19): qwen3:8b kept citing v1's overview for
+    v1's "99.9%" (it is in v1's availability passage) and, when told, moved the wrong label onto
+    the other figure; three verifier rejections later the run failed. Matching an exact figure
+    is something code does reliably; the completed answer is still checked by verify_answer
+    against the passages it now cites, so this can only add the right source, never a claim."""
+    if draft.insufficient_evidence:
+        return draft, []
+    cited = set(cited_labels(draft))
+    cited_text = " ".join(
+        str(store.passages[label]["text"]) for label in cited if label in store.passages
+    ) + " ".join(json.dumps(store.tool_results[t].output) for t in cited if t in store.tool_results)
+    added: list[str] = []
+    answer = draft.answer
+    for m in _FIGURE.finditer(draft.answer):
+        figure = m.group().strip().rstrip(".,")
+        if len(figure) < 2 or figure in cited_text:
+            continue
+        where = [
+            label
+            for label in sorted(store.passages, key=_label_key)
+            if figure in str(store.passages[label]["text"])
+        ]
+        if 1 <= len(where) <= 2:  # a figure found everywhere identifies no source
+            new = [label for label in where if label not in cited and label not in added]
+            if new:
+                added += new
+                # Put the source next to the figure, so the inline marker a reader clicks
+                # opens the passage that states it.
+                answer = answer.replace(figure, f"{figure} {''.join(f'[{x}]' for x in new)}", 1)
+    if not added:
+        return draft, []
+    update = {"citations": [*draft.citations, *added], "answer": answer}
+    return draft.model_copy(update=update), added
 
 
 @node("retry_or_revise")

@@ -102,3 +102,14 @@ def test_chunk_ids_are_stable_and_config_sensitive() -> None:
     assert first == again
     assert len(set(first)) == len(first)
     assert not set(first) & set(other)
+
+
+def test_a_short_final_section_is_merged_into_the_previous_chunk() -> None:
+    body = "Retention is 5 years in the primary store. " * 18  # ~800 chars
+    risks = "## Open Risks\n\nThe 5-year retention conflicts."
+    text = f"# Doc\n\n## Data Retention\n\n{body}\n\n{risks}"
+    chunks = chunk_text(text, ChunkingConfig(size=1200, overlap=200))
+    assert len(chunks) == 1 and "conflicts" in chunks[0].text
+    assert chunks[0].section and "Open Risks" in chunks[0].section
+    long_tail = text + "\n\n" + ("More risk text. " * 40)  # final section is not a runt
+    assert len(chunk_text(long_tail, ChunkingConfig(size=1200, overlap=200))) >= 2

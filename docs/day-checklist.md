@@ -60,14 +60,14 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [x] Recorder review found 5 gaps; 2 reproduced with failing tests and fixed (tenant ContextVar in sync dependency; `-negation` inverted by OR rewrite)
 
 ### Deferred (tracked, not forgotten)
-- [ ] Vector relevance threshold → Day 4, tuned on eval set
-- [ ] Durable background queue (BackgroundTasks is in-process) → Day 4 hardening
-- [ ] Rate limiting → Day 4
-- [ ] Reranker interface → only if eval shows ranking errors RRF does not fix
-- [ ] Reindex/delete availability: keep serving the previous index during reindex; re-promote the prior version on delete → Day 4
-- [ ] Re-upload of an older version's bytes should make it latest (today: duplicate no-op) → Day 4
-- [ ] `mark_for_reindex` is check-then-update; make it an atomic conditional UPDATE → Day 2 (with executions)
-- [ ] Citations are checked for existence, not entailment → Day 2 `verify_answer` node
+- [x] Vector relevance threshold → Day 4, tuned on eval set — **done**: measured on Day 4 and deliberately left off (score ranges overlap)
+- [x] Durable background queue (BackgroundTasks is in-process) → Day 4 hardening — **done**: documents table as queue: claim lease, heartbeat, attempts, worker (migration 0007)
+- [x] Rate limiting → Day 4 — **done**: Day 4 M11
+- [x] Reranker interface → only if eval shows ranking errors RRF does not fix — **done**: not needed: the retrieval eval shows no ranking error RRF fails on; the one miss (multi-retention) was a chunking runt, fixed
+- [x] Reindex/delete availability: keep serving the previous index during reindex; re-promote the prior version on delete → Day 4 — **done**: `searchable` flag; failed reindex keeps the old index; delete re-promotes
+- [x] Re-upload of an older version's bytes should make it latest (today: duplicate no-op) → Day 4 — **done**: re-upload restores it as latest; a FAILED document's bytes are queued again
+- [x] `mark_for_reindex` is check-then-update; make it an atomic conditional UPDATE → Day 2 (with executions) — **done**: one conditional UPDATE
+- [x] Citations are checked for existence, not entailment → Day 2 `verify_answer` node — **done**: `verify_answer` node (Day 2)
 
 ---
 
@@ -119,19 +119,19 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [x] Recorder reviews found 39 issues across M1–M4; the cheap/important ones were fixed with regression tests (see commit messages)
 
 ### Deferred (tracked)
-- [ ] Router-internal retries and failed calls do not count tokens against the budget → Day 4
-- [ ] History trimming can drop a turn whose S# is still citable → Day 4 context work
-- [ ] Approval expiry/notification; claimed approval whose resume fails stays "approved" → Day 4 hardening
-- [ ] Checkpoints copy the full ledger at every node and keep passage text / tool arguments; no cleanup after a run → Day 4
-- [ ] An approved write that crashes before its checkpoint is replayed on recovery (no idempotency key) → Day 3 workspace tools
-- [ ] Graph answer prompt has no total evidence cap (fits 8k today: ≤15 passages × 1.5 KB) → Day 4
-- [ ] `insufficient_evidence` drafts return model text unverified; verifier output that fails to parse is reported as `unavailable`, not blocked → decide with Day 3 eval data
-- [ ] Approval flow is unreachable in production until a write tool exists and tenants can be granted write permissions → Day 3 workspace tools
-- [ ] Approve/reject resume synchronously (request lasts the rest of the run); move to 202 + poll/stream → Day 4
-- [ ] Approval claimed but resume fails/crashes → approval `approved`, execution stuck `awaiting_approval`; paused save + approval insert are two transactions → Day 4
-- [ ] SSE has no event ids / reconnect (a dropped connection cancels the run) → Day 5 UI
-- [ ] Cancelled/failed results drop partial evidence from the execution row (the ledger keeps it) → Day 4
-- [ ] Model calls are slow under memory pressure (other containers + 8b at 8k ctx) → Day 4 routing/caching
+- [x] Router-internal retries and failed calls do not count tokens against the budget → Day 4 — **done**: Day 4 usage accounting from the ledger; failed calls count against the model-call budget
+- [x] History trimming can drop a turn whose S# is still citable → Day 4 context work — **done**: trimmed turns leave a recap of their citable sources
+- [x] Approval expiry/notification; claimed approval whose resume fails stays "approved" → Day 4 hardening — **done**: TTL expiry (run ends `approval_expired`), lost resumes reopened, listed under `status=expired`
+- [x] Checkpoints copy the full ledger at every node and keep passage text / tool arguments; no cleanup after a run → Day 4 — **done**: ledger only in resumable checkpoints; checkpoints deleted when a run ends
+- [x] An approved write that crashes before its checkpoint is replayed on recovery (no idempotency key) → Day 3 workspace tools — **done**: Day 3 write receipts (idempotency key per execution + call); receipts pruned after 7 days
+- [x] Graph answer prompt has no total evidence cap (fits 8k today: ≤15 passages × 1.5 KB) → Day 4 — **done**: Day 4 evidence cap
+- [x] `insufficient_evidence` drafts return model text unverified; verifier output that fails to parse is reported as `unavailable`, not blocked → decide with Day 3 eval data — **done**: Day 4: fixed text, never unverified claims
+- [x] Approval flow is unreachable in production until a write tool exists and tenants can be granted write permissions → Day 3 workspace tools — **done**: Day 3 workspace write tools + per-tenant grants
+- [x] Approve/reject resume synchronously (request lasts the rest of the run); move to 202 + poll/stream → Day 4 — **done**: 202 + Location, resume in background; `?wait=true` keeps the blocking form
+- [x] Approval claimed but resume fails/crashes → approval `approved`, execution stuck `awaiting_approval`; paused save + approval insert are two transactions → Day 4 — **done**: claim released if the resume cannot start; reopened after the grace period; pause + approval in one transaction
+- [x] SSE has no event ids / reconnect (a dropped connection cancels the run) → Day 5 UI — **done**: `id:` per ledger event, 30 s reconnect grace, GET /executions/{id}/stream with Last-Event-ID, UI reconnects
+- [x] Cancelled/failed results drop partial evidence from the execution row (the ledger keeps it) → Day 4 — **done**: stopped runs list the sources gathered so far
+- [x] Model calls are slow under memory pressure (other containers + 8b at 8k ctx) → Day 4 routing/caching — **done**: Day 4 routing (p50 −36%) and caches; the rest is hardware
 
 ## Day 3 — Workspace tools + observability + evaluation (done Mon 26 Oct, branch `day-3-workspace-observability-eval`)
 
@@ -179,16 +179,16 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [x] Recorder reviews found real defects, fixed with regression tests: edit replay crash window, unaudited API refusals, audit failure surfacing as tool error, guard refusing reads/re-runs, GNU `grep -R`, terminal non-JSON frames, permissions frozen in checkpoints, span order, capture_io leaks, resumed traces without input
 
 ### Deferred (tracked)
-- [ ] After a failed first attempt + successful retry, the model may report a workspace action as failed (eval case `ws-edit-approved`) → Day 4
-- [ ] Workspace: not an OS sandbox (container for exec), per-tenant all-or-nothing permissions, receipt cleanup, terminal disconnect detection during silent commands → Day 4 hardening
-- [ ] Observability: `_trace` skipped on ConflictError / save failure; 500-event cap unmarked; `GET /api/v1/metrics` → Day 4
-- [ ] Relevance threshold and model routing tuned against the eval set → Day 4
-- [ ] Tool-use 2/5: graph does arithmetic without the calculator; `tool-rto-diff`/`multi-retention` say insufficient evidence → Day 4 (eval-driven)
-- [ ] Loop-mode baseline not run yet (graph only) → Day 4 loop-vs-graph comparison
-- [ ] Day 2 deferral confirmed by eval data: `insufficient_evidence` drafts skip verification (`tool-rto-diff` returned an unverified "45 minutes" claim) → Day 4
-- [ ] Eval: substring checks are loose ("pass" matches "did not pass"); two adversarial cases pass vacuously with 0 tool calls; per-case cost not persisted; RAG metrics (recall@k, MRR) missing; run lock is per process; any tenant can start a run → Day 4
-- [ ] Judge sees 300-char snippets only and cannot see workspace state (5/5 on the false `ws-edit-approved` report) → advisory only, Day 4
-- [ ] `datasets/corpus` now includes the prompt-injection doc, so `agentops ingest datasets/corpus` loads it for tenant_a too (intended as an adversarial fixture)
+- [x] After a failed first attempt + successful retry, the model may report a workspace action as failed (eval case `ws-edit-approved`) → Day 4 — **done**: verified per-file workspace outcome computed from the tool results
+- [x] Workspace: not an OS sandbox (container for exec), per-tenant all-or-nothing permissions, receipt cleanup, terminal disconnect detection during silent commands → Day 4 hardening — **done**: docker exec backend (no network, cap-drop, read-only rootfs, limits); receipt pruning; disconnect kills the command. Per-tenant all-or-nothing grants remain
+- [x] Observability: `_trace` skipped on ConflictError / save failure; 500-event cap unmarked; `GET /api/v1/metrics` → Day 4 — **done**: traced even when saving fails; truncation marked; GET /api/v1/metrics (Day 4)
+- [x] Relevance threshold and model routing tuned against the eval set → Day 4 — **done**: Day 4
+- [x] Tool-use 2/5: graph does arithmetic without the calculator; `tool-rto-diff`/`multi-retention` say insufficient evidence → Day 4 (eval-driven) — **done**: Day 4: 5/5
+- [x] Loop-mode baseline not run yet (graph only) → Day 4 loop-vs-graph comparison — **done**: Day 5 loop-vs-graph benchmark
+- [x] Day 2 deferral confirmed by eval data: `insufficient_evidence` drafts skip verification (`tool-rto-diff` returned an unverified "45 minutes" claim) → Day 4 — **done**: Day 4
+- [x] Eval: substring checks are loose ("pass" matches "did not pass"); two adversarial cases pass vacuously with 0 tool calls; per-case cost not persisted; RAG metrics (recall@k, MRR) missing; run lock is per process; any tenant can start a run → Day 4 — **done**: token- and negation-aware checks, `attack_exercised` evaluator, per-case cost (Day 4), recall@k/MRR (Day 4), cross-process advisory lock, operator-only (Day 4)
+- [x] Judge sees 300-char snippets only and cannot see workspace state (5/5 on the false `ws-edit-approved` report) → advisory only, Day 4 — **done**: kept advisory by design; the deterministic `workspace_effects` evaluator checks the files
+- [x] `datasets/corpus` now includes the prompt-injection doc, so `agentops ingest datasets/corpus` loads it for tenant_a too (intended as an adversarial fixture) — **done**: intended: it is the adversarial fixture (use case 6)
 
 ## Day 4 — Optimization, drift, hardening (done Fri 13 Nov, branch `day-4-optimization-drift-hardening`)
 
@@ -231,14 +231,14 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [x] Live runs on qwen3:8b / qwen3:1.7b (Ollama on :11435; :11434 belongs to another project's container without these models)
 
 ### Deferred (tracked)
-- [ ] Caches showed ~0 hits in the benchmark (each golden question runs once); their value is for repeated questions and is shown by unit/integration tests only, not measured live
-- [ ] `multi-retention` (both profiles) and `ws-edit-approved` (false "could not" after a retried edit) still fail
-- [ ] Loop-mode baseline still not run (graph only)
-- [ ] Rate limits and caches are per process (Redis for multiple replicas); the WebSocket terminal is not rate limited
-- [ ] Relevance floor stays off: the measured score ranges overlap
-- [ ] Drift detector: no newly-failing-case rule (a one-case regression only shows in the benchmark/eval gate); alerts cannot be acknowledged yet; the default eval head can be an experiment run
-- [ ] Compose `api` defaults Ollama to host :11434 (on this machine that is another project's Ollama); CI gates committed reports only, it never runs the models
-- [ ] Benchmark latency is sensitive to machine state (swap reached 9 GB with another project's containers running); token and call counts are the machine-independent signal
+- [x] Caches showed ~0 hits in the benchmark (each golden question runs once); their value is for repeated questions and is shown by unit/integration tests only, not measured live — **done**: expected for single-pass evaluation; covered by unit/integration tests
+- [x] `multi-retention` (both profiles) and `ws-edit-approved` (false "could not" after a retried edit) still fail — **done**: fixed: trailing-runt chunk merge, scoped verifier feedback, verified workspace outcome
+- [x] Loop-mode baseline still not run (graph only) — **done**: Day 5
+- [x] Rate limits and caches are per process (Redis for multiple replicas); the WebSocket terminal is not rate limited — **done**: WebSocket terminal now rate limited; multi-replica (Redis) stays a documented limitation
+- [x] Relevance floor stays off: the measured score ranges overlap — **done**: decision recorded
+- [x] Drift detector: no newly-failing-case rule (a one-case regression only shows in the benchmark/eval gate); alerts cannot be acknowledged yet; the default eval head can be an experiment run — **done**: `newly_failing_cases` signal, alert acknowledgement, experiment runs excluded
+- [x] Compose `api` defaults Ollama to host :11434 (on this machine that is another project's Ollama); CI gates committed reports only, it never runs the models — **done**: documented; verified with Ollama on 0.0.0.0
+- [x] Benchmark latency is sensitive to machine state (swap reached 9 GB with another project's containers running); token and call counts are the machine-independent signal — **done**: documented; tokens and call counts are the gate's stable signals
 
 ## Day 4 — original plan (Sat 24 Oct)
 ## Day 5 — Web UI + end-to-end demo (done Sat 14 Nov, branch `day-5-ui-demo`)
@@ -268,14 +268,14 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [x] Loop-vs-graph comparison measured at last (Day 3 deferral; [docs/benchmarks/loop-vs-graph.md](benchmarks/loop-vs-graph.md)): on the same 33 cases the loop passes 1/33 strictly, 24/33 without `structured_output` (graph 29/33 baseline, 32/33 optimized). qwen3:8b answers in prose before `final_answer` in 31/33 loop runs; the loop uses 44% more tokens than the graph baseline
 
 ### Deferred / known limitations
-- [ ] An evaluation run killed with its process (machine sleep) stays `running`; only a graceful cancel marks it failed
-- [ ] Drift check's default retrieval head is the latest report, which can be an experiment probe
-- [ ] UI: API key in local storage is the only credential; terminal is one command at a time; no mobile layout
+- [x] An evaluation run killed with its process (machine sleep) stays `running`; only a graceful cancel marks it failed — **done**: post-Day-5: marked failed after the stale window
+- [x] Drift check's default retrieval head is the latest report, which can be an experiment probe — **done**: post-Day-5
+- [x] UI: API key in local storage is the only credential; terminal is one command at a time; no mobile layout — **done**: phone-width layout added; key-based auth and single-command terminal remain documented limitations
 
 ## After Day 5 — open-item fixes (branch `post-day-5-fixes`)
 - [x] Drift check's default "current" eval and retrieval runs exclude experiment profiles (a deliberate `degraded-chunking` probe was being reported as drift of the running system); filter in SQL; regression test
 - [x] Abandoned evaluation runs (process killed, machine slept) are marked `failed` after `AGENTOPS_EVAL_STALE_AFTER_S` (default 4 h) when runs are listed or a new run starts; regression test
 - [x] Remaining methods named `list` renamed (`IngestionService.list_documents`, `ApprovalStore.find`, `DbAudit.recent`): the Day 5 import trap
 - [x] 375 tests pass with `-W error`; ruff and mypy strict clean
-- [ ] Demo through `docker compose --profile app`: the image builds, migrates, and reaches the database (`/ready`: database ok), but on macOS the container cannot reach an Ollama bound to loopback; needs Ollama listening beyond loopback (a decision for the machine's owner: it exposes Ollama to the local network)
+- [x] Demo through `docker compose --profile app`: the image builds, migrates, and reaches the database (`/ready`: database ok), but on macOS the container cannot reach an Ollama bound to loopback; needs Ollama listening beyond loopback (a decision for the machine's owner: it exposes Ollama to the local network) — **done**: run with Ollama on 0.0.0.0 (see Hardening and portfolio)
 

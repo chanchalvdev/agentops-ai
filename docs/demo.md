@@ -51,8 +51,10 @@ Click **Review in Approvals**:
 - The preview shows the change as a diff against the current file (here: a new file, one added
   line). For an edit it shows exactly which lines change; if the text to replace is not in the
   file, it says the tool will refuse.
-- **Approve**: the run resumes from its Postgres checkpoint, performs the write, and answers with
-  a `[T1]` reference to the write receipt. **Reject** (with a reason): nothing is written.
+- **Approve**: the API records the decision and returns at once (202); the run resumes from its
+  Postgres checkpoint in the background, performs the write, and the screen shows the answer when
+  the run finishes, with a `[T1]` reference to the write receipt. **Reject** (with a reason):
+  nothing is written. An approval nobody decides expires after 24 h (filter *All decisions*).
 
 During a rehearsal the agent proposed an edit that would have duplicated a line in a file that
 already had the function. The diff made that obvious, and it was rejected. That is the point of
@@ -69,8 +71,14 @@ reviewing a preview instead of approving blind.
 | `cat ../../.env` | `workspace_access_denied` (path jail) |
 | `ls calc \| wc -l` | `invalid_request` (no shell: no pipes, redirects, `;`, `&&`) |
 
-The terminal uses the same executor and policy as the agent's `workspace_exec` tool. **Audit log**
+The terminal uses the same executor and policy as the agent's `workspace_exec` tool, and the same
+rate limit. With `AGENTOPS_WORKSPACE_EXEC_BACKEND=docker`, `python -m pytest` runs inside a
+throwaway container with no network. **Audit log**
 lists every operation, including those refusals.
+
+Resilience to try: start a long question in **Chat**, turn Wi-Fi off for ten seconds, turn it
+back on. The stream reconnects and continues from the last event it had (the server keeps the
+run alive for 30 s). The whole UI also works at phone width.
 
 ## 6. Traces
 
@@ -85,8 +93,8 @@ recorded data.
 - **Evaluation runs**: the committed Day 4 runs show baseline 33/38 and optimized 36/38. Compare
   them: pass rate 87% → 95%, no threshold breaches, three newly passing tool-use cases.
 - **Monitoring → Run check now**: a drift check over quality, retrieval, data, and operational
-  signals, persisted with one alert per breach. If the latest retrieval report is the
-  `degraded-chunking` probe, answer coverage is flagged as measured drift (0.971 → 0.882).
+  signals, persisted with one alert per breach, including any single case that passed in the
+  baseline and fails now. **Acknowledge** takes an alert off the open list; it stays on record.
 
 Change the key to `dev-key-tenant-b`: the evaluation screens explain that this tenant is not an
 operator, the workspace refuses access (403, and the terminal closes with 4403), and tenant A's

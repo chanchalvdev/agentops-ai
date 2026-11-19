@@ -307,3 +307,30 @@ async def test_workspace_report_is_never_insufficient_evidence(manager: Workspac
     assert restored is not None
     result = await graph.resume(restored, approved=False, call_id="w1")
     assert result.status == "answered" and result.verification == "supported"
+
+
+def test_workspace_outcome_states_that_a_retried_edit_was_made() -> None:
+    from app.agents.evidence import EvidenceStore
+    from app.agents.nodes import workspace_outcome
+
+    store = EvidenceStore()
+    store.add_tool_result("workspace_edit", {"error": "invalid_request", "message": "not found"})
+    store.add_tool_result("workspace_read", {"path": "calc/mathlib.py", "content": "..."})
+    store.add_tool_result(
+        "workspace_edit",
+        {
+            "outcome": "applied",
+            "path": "calc/mathlib.py",
+            "bytes": 9,
+            "sha256": "x",
+            "created": False,
+        },
+    )
+    text = workspace_outcome(store)
+    assert "calc/mathlib.py: changed (applied) [T3]" in text
+    assert "[T1] (invalid_request) failed" in text and "WAS made" in text
+
+    only_failed = EvidenceStore()
+    only_failed.add_tool_result("workspace_write", {"error": "workspace_access_denied"})
+    assert "No change was made" in workspace_outcome(only_failed)
+    assert workspace_outcome(EvidenceStore()) == ""

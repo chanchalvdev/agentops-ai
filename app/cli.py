@@ -5,6 +5,7 @@ agentops search "RPO for payments" --mode hybrid
 agentops ask "What is the payments RPO in v2?"
 agentops run "What is the RPO in v2, in seconds?" --mode graph --trace
 agentops approvals                      # pending human decisions
+agentops reindex [--tenant t]           # re-chunk + re-embed after a config change
 agentops approve <approval-id>          # or: agentops reject <approval-id> --reason "..."
 agentops eval run --judge --out reports/eval.json [--baseline datasets/baselines/x.json]
 agentops eval compare base.json head.json
@@ -93,6 +94,41 @@ def ingest(paths: list[Path], tenant: Tenant = "tenant_a") -> None:
             doc = await services.ingestion.get(tenant, doc.id)
             typer.echo(
                 f"  {status:<22} {f.name} v{doc.version} chunks={doc.chunk_count}"
+                + (f" error={doc.error}" if doc.error else "")
+            )
+
+    asyncio.run(_with_services(run))
+
+
+@cli.command()
+def reindex(
+    tenant: Annotated[
+        str | None, typer.Option(help="Only this tenant (default: every tenant)")
+    ] = None,
+) -> None:
+    """Re-chunk and re-embed every document, e.g. after changing chunking or the embedding
+    model. Each document keeps serving its previous index until its new one is committed."""
+
+    async def run(services: Services) -> None:
+        from sqlalchemy import select
+
+        from app.db.models import Document
+
+        query = select(Document.id, Document.tenant_id, Document.filename, Document.version)
+        if tenant:
+            query = query.where(Document.tenant_id == tenant)
+        async with services.sessions() as session:
+            rows = (await session.execute(query.order_by(Document.tenant_id))).all()
+        for doc_id, owner, name, version in rows:
+            try:
+                await services.ingestion.mark_for_reindex(owner, doc_id)
+            except AppError as exc:
+                typer.secho(f"  skipped  {owner}/{name} v{version}: {exc.message}", fg="yellow")
+                continue
+            status = await services.ingestion.process_document(doc_id)
+            doc = await services.ingestion.get(owner, doc_id)
+            typer.echo(
+                f"  {status.value:<10} {owner}/{name} v{version} chunks={doc.chunk_count}"
                 + (f" error={doc.error}" if doc.error else "")
             )
 
