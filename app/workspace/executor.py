@@ -261,6 +261,15 @@ def _kill(proc: asyncio.subprocess.Process) -> None:
         os.killpg(proc.pid, signal.SIGKILL)  # the whole group: pytest may spawn children
 
 
+def _container_user(cwd: Path) -> str:
+    """Run as the owner of the workspace directory. On Linux a bind mount keeps host ownership,
+    so a fixed container uid cannot read a tenant directory owned by the API's user (CI caught
+    this: "Permission denied: /workspace/conftest.py"; Docker Desktop on macOS remaps it). Never
+    root: a root-owned workspace falls back to the image's unprivileged uid 10001."""
+    st = cwd.stat()
+    return f"{st.st_uid}:{st.st_gid}" if st.st_uid != 0 else "10001:10001"
+
+
 @dataclass(frozen=True)
 class DockerSandbox:
     """Runs each command in a fresh container. The docker CLI itself runs with the server's
@@ -302,7 +311,7 @@ class DockerSandbox:
             "--pids-limit",
             str(self.pids),
             "--user",
-            "10001:10001",
+            _container_user(cwd),
             "--volume",
             f"{cwd}:/workspace:rw",
             "--workdir",
