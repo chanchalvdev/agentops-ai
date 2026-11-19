@@ -334,3 +334,26 @@ def test_workspace_outcome_states_that_a_retried_edit_was_made() -> None:
     only_failed.add_tool_result("workspace_write", {"error": "workspace_access_denied"})
     assert "No change was made" in workspace_outcome(only_failed)
     assert workspace_outcome(EvidenceStore()) == ""
+
+
+async def test_old_write_receipts_are_pruned(tmp_path: Path) -> None:
+    import os
+    import time
+    import uuid
+
+    from app.workspace import jail
+    from app.workspace.jail import Actor
+
+    m = WorkspaceManager(tmp_path / "ws", MemoryAudit(), receipt_ttl_s=3600)
+    ws = m.for_tenant("tenant_a")
+    receipts = tmp_path / "ws" / ".receipts" / "tenant_a"
+    receipts.mkdir(parents=True)
+    stale, fresh = receipts / "old.json", receipts / "new.json"
+    stale.write_text("{}")
+    fresh.write_text("{}")
+    os.utime(stale, (time.time() - 7200, time.time() - 7200))
+    jail._LAST_PRUNE.pop(receipts, None)
+    agent = Actor(kind="agent", execution_id=uuid.uuid4(), call_id="c1")
+    await ws.write("a.txt", "x", agent)
+    assert not stale.exists() and fresh.exists()
+    assert len(list(receipts.iterdir())) == 2  # the fresh one and this write's own receipt

@@ -25,6 +25,27 @@ Seven flows: ingestion, grounded Q&A, tool call through the policy gate, workspa
 approval, failure handling, observability/evaluation/drift, and the Recorder process. Badges
 mark what is **built** versus the plan day that delivers it.
 
+## Results
+
+Live, on an Apple M4 with 16 GB, local models only (qwen3:8b answers and verifies, qwen3:1.7b
+classifies and plans, nomic-embed-text embeds), graph workflow, 38-case golden set:
+
+| Run | Pass | Multi-doc | Tool use | Workspace | Adversarial | p50 | p95 |
+|---|---|---|---|---|---|---|---|
+| Day 4 baseline | 33/38 (87%) | 4/5 | 2/5 | 4/5 | 7/7 | 43.1 s | 65.4 s |
+| Day 4 `optimized` | 36/38 (95%) | 4/5 | 5/5 | 4/5 | 7/7 | 27.5 s | 60.0 s |
+| Hardening (current) | **37/38 (97%)** | 5/5 | 4/5 | 5/5 | 7/7 | 27.4 s | 58.8 s |
+
+Every answerable, unanswerable, adversarial (incl. prompt injection, secret files, path escape),
+and workspace case passes; no unsafe tool call in any run; LLM-judge correctness 0.986 (advisory).
+The current run uses stricter checks than the Day 4 runs (token- and negation-aware matching,
+adversarial attempts must actually be exercised). Reports:
+[datasets/baselines/](datasets/baselines/); how each failure was traced and fixed:
+[docs/journal/15-hardening-and-portfolio.md](docs/journal/15-hardening-and-portfolio.md).
+
+402 automated tests (unit, integration on Postgres + pgvector, security incl. a real Docker
+sandbox), ruff, mypy strict, and web type-check/tests run in CI.
+
 ## Quick start
 
 Prerequisites: Docker, [uv](https://docs.astral.sh/uv/), [Ollama](https://ollama.com) (`brew install ollama`).
@@ -387,7 +408,7 @@ reported as `0` with `pricing_source: "local"`; hosted models without a configur
 - The custom loop is kept as a teaching baseline: qwen3:8b often answers in prose before
   `final_answer` ([docs/benchmarks/loop-vs-graph.md](docs/benchmarks/loop-vs-graph.md)); use the graph.
 - LLM-judge scores come from the same local model family that wrote the answers: advisory only.
-- Live results (golden-v1, graph, qwen3:8b): baseline 33/38 (87%), `optimized` 36/38 (95%; tool
-  use 2/5 → 5/5). Still failing: `multi-retention` and `ws-edit-approved`.
+- One golden case still fails in the full run: `tool-rto-diff` (the calculator returns the right
+  45 minutes, but the verifier rejects the derived figure). See Results.
 - Tokens spent on failed model calls and on router-internal retries are not counted against the
   token budget (the harness counts calls when attempted, but tokens only from successful replies).

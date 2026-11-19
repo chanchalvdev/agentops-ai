@@ -237,7 +237,7 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [x] Rate limits and caches are per process (Redis for multiple replicas); the WebSocket terminal is not rate limited — **done**: WebSocket terminal now rate limited; multi-replica (Redis) stays a documented limitation
 - [x] Relevance floor stays off: the measured score ranges overlap — **done**: decision recorded
 - [x] Drift detector: no newly-failing-case rule (a one-case regression only shows in the benchmark/eval gate); alerts cannot be acknowledged yet; the default eval head can be an experiment run — **done**: `newly_failing_cases` signal, alert acknowledgement, experiment runs excluded
-- [x] Compose `api` defaults Ollama to host :11434 (on this machine that is another project's Ollama); CI gates committed reports only, it never runs the models — **done**: documented; verified with Ollama on 0.0.0.0
+- [x] Compose `api` defaults Ollama to host :11434 (on this machine that is another project's Ollama); CI gates committed reports only, it never runs the models — **done**: documented (README Hardening); the compose run itself is still open
 - [x] Benchmark latency is sensitive to machine state (swap reached 9 GB with another project's containers running); token and call counts are the machine-independent signal — **done**: documented; tokens and call counts are the gate's stable signals
 
 ## Day 4 — original plan (Sat 24 Oct)
@@ -277,5 +277,40 @@ verified by a test or a recorded live run; `[~]` = partial; `[ ]` = not done.
 - [x] Abandoned evaluation runs (process killed, machine slept) are marked `failed` after `AGENTOPS_EVAL_STALE_AFTER_S` (default 4 h) when runs are listed or a new run starts; regression test
 - [x] Remaining methods named `list` renamed (`IngestionService.list_documents`, `ApprovalStore.find`, `DbAudit.recent`): the Day 5 import trap
 - [x] 375 tests pass with `-W error`; ruff and mypy strict clean
-- [x] Demo through `docker compose --profile app`: the image builds, migrates, and reaches the database (`/ready`: database ok), but on macOS the container cannot reach an Ollama bound to loopback; needs Ollama listening beyond loopback (a decision for the machine's owner: it exposes Ollama to the local network) — **done**: run with Ollama on 0.0.0.0 (see Hardening and portfolio)
+- [ ] Demo through `docker compose --profile app`: the image builds, migrates, and reaches the database (`/ready`: database ok), but on macOS the container cannot reach an Ollama bound to loopback; needs Ollama listening beyond loopback (a decision for the machine's owner: it exposes Ollama to the local network) — still open: needs `OLLAMA_HOST=0.0.0.0` (exposes Ollama on the LAN) and a compose run
 
+
+## Hardening and portfolio (branch `hardening-and-portfolio`, Wed 18 – Thu 19 Nov)
+
+### Reliability
+- [x] Approvals: 202 + background resume (`?wait=true` keeps the blocking form); TTL expiry ends the run `approval_expired`; decisions whose resume died are reopened; the pause and its approval are written in one transaction; checkpoints deleted when a run ends; ledger kept only in resumable checkpoints
+- [x] Durable indexing: the documents table is the queue (atomic claim, lease + heartbeat, attempts cap, worker); `searchable` keeps the previous index serving during reindex and after a failed one; deleting the latest version re-promotes the previous one; re-uploading old bytes restores them as latest (migration 0007)
+- [x] SSE: `id:` per ledger event, 30 s reconnect grace, `GET /executions/{id}/stream` with Last-Event-ID; the web client reconnects automatically (an `aclosing` bug in the follower was caught by the disconnect test)
+- [x] Stopped runs keep the sources they gathered; trimmed history leaves a recap of citable sources; traces exported even when saving fails, truncation marked
+
+### Security
+- [x] Docker exec sandbox (`AGENTOPS_WORKSPACE_EXEC_BACKEND=docker`): no network, cap-drop ALL, no-new-privileges, read-only root, CPU/memory/PID limits, non-root, only the tenant directory mounted; 3 security tests against a real container; CI builds the image and runs them
+- [x] Terminal WebSocket shares the workspace rate limit; a disconnect kills the running command; frames during a command get `busy`
+- [x] Write receipts pruned after 7 days
+
+### Evaluation and monitoring
+- [x] Content checks are token- and negation-aware ("5 minutes" ≠ "15 minutes", "did not pass" ≠ "pass"); `attack_exercised` stops adversarial cases passing vacuously; one evaluation run at a time across processes (advisory lock)
+- [x] Drift: `newly_failing_cases` names a single regressed case; alerts can be acknowledged (API + UI, migration 0006)
+
+### Answer quality (diagnosed from raw model traces, fixed in code where code is reliable)
+- [x] `multi-retention`: the deciding sentence was a 265-char trailing chunk ranked 6th → trailing-runt merge; verifier rejected a mis-cited draft and the reviser gave up → verifier quotes claims only, feedback names what was checked
+- [x] `ws-edit-approved`: a failed first edit outweighed the successful retry → verified per-file outcome computed from tool results
+- [x] `multi-availability`: the model kept citing the wrong passage at temperature 0 → `complete_citations` attaches the passage that states each figure (inline and in the list); the verifier still checks the result
+- [x] `tool-rto-diff`: "insufficient + cited answer" → one correction to resolve the contradiction
+- [x] `agentops reindex`; the eval corpus is reindexed when its chunking config differs from the server's
+
+### Docs and UI
+- [x] [docs/use-cases.md](use-cases.md): ten use cases with commands and guarantees; README, demo, `.env.example` updated
+- [x] Alert acknowledgement and approval polling in the UI; phone-width gutters and scrollable tables
+
+### Verification
+- [x] 402 tests (`-W error`), ruff, ruff format, mypy strict, web typecheck + tests
+- [x] Final live evaluation (optimized profile, qwen3:8b + qwen3:1.7b, with judge): **37/38 (97%)**, was 36/38; multi_document 5/5 (was 4/5); p50 27.4 s (was 32.8 s), p95 58.8 s (was 89.6 s); judge correctness 0.986. Committed as `datasets/baselines/golden-v1-graph-qwen3-8b-hardening.json` and gated in CI
+- [ ] `tool-rto-diff` fails in the full run (passed in an isolated probe): the calculator returns 45, but the verifier rejects the derived answer three times. Next: verify derived figures against passages + calculator result together
+- [ ] Docker Compose demo against Ollama on 0.0.0.0: not re-run in this milestone (the API container still runs the host exec backend)
+- [ ] Phone-width check of the UI in a real browser: not done (the browser extension was unavailable); gutters and table scrolling were changed in code and type-checked only

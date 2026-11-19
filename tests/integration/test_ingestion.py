@@ -241,3 +241,23 @@ async def test_concurrent_reindex_requests_claim_the_document_once(
     )
     assert sum(not isinstance(r, Exception) for r in results) == 1
     assert sum(isinstance(r, ConflictError) for r in results) == 4
+
+
+async def test_the_indexing_worker_reclaims_abandoned_documents(
+    services: Services, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    doc, _ = await services.ingestion.create_document("tenant_a", "q.md", DOC.encode())
+    # Nobody processes it (the request's own task never ran): the worker must pick it up.
+    monkeypatch.setattr(services.settings, "indexing_poll_s", 0.05)
+    monkeypatch.setattr(services.settings, "indexing_worker_enabled", True)
+    services.start_indexing_worker()
+    try:
+        for _ in range(100):
+            if (await services.ingestion.get("tenant_a", doc.id)).status == DocumentStatus.READY:
+                break
+            await asyncio.sleep(0.05)
+        assert (await services.ingestion.get("tenant_a", doc.id)).searchable
+    finally:
+        await services.aclose()  # cancels the worker; the fixture's aclose is then a no-op
