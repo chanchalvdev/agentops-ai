@@ -11,3 +11,5 @@ reports
 docs
 tests
 product.txt
+web/node_modules
+web/dist

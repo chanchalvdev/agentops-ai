@@ -88,6 +88,7 @@ async def test_ollama_non_dict_arguments_are_kept_raw_not_guessed() -> None:
     ("status", "error", "transient"),
     [
         (429, RateLimitError, True),
+        (413, RateLimitError, True),  # per-minute token quota on hosted free tiers
         (500, ProviderUnavailableError, True),
         (503, ProviderUnavailableError, True),
         (404, ProviderError, False),

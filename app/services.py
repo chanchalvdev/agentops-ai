@@ -31,8 +31,8 @@ from app.core.cache import TTLCache
 from app.core.config import Settings
 from app.core.ratelimit import RateLimiter
 from app.core.security import ApiKeyAuthenticator
-from app.db.session import make_engine, make_sessionmaker
-from app.ingestion.embeddings import Embedder, FakeEmbedder, OllamaEmbedder
+from app.db.session import make_engine, make_sessionmaker, psycopg_conninfo
+from app.ingestion.embeddings import Embedder, FakeEmbedder, FastEmbedEmbedder, OllamaEmbedder
 from app.ingestion.pipeline import IngestionService
 from app.llm.provider import (
     FakeProvider,
@@ -100,7 +100,7 @@ class Services:
         saver: BaseCheckpointSaver[Any]
         if self.settings.agent_checkpointer == "postgres":
             # The checkpointer speaks psycopg 3, not asyncpg; same database, its own tables.
-            conninfo = self.settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+            conninfo = psycopg_conninfo(self.settings.database_url)
             self._pool = AsyncConnectionPool(
                 conninfo,
                 max_size=5,
@@ -166,9 +166,13 @@ def config_fingerprint(settings: Settings) -> str:
     """Everything an answer depends on besides the question and the corpus. Part of every
     answer-cache key, so changing a model, prompt, or retrieval setting never serves old answers."""
     keys = (
+        "llm_provider",
+        "llm_base_url",
         "llm_model_main",
         "llm_model_small",
+        "embedding_provider",
         "embedding_model",
+        "fastembed_model",
         "chunk_strategy",
         "chunk_size_chars",
         "chunk_overlap_chars",
@@ -187,21 +191,46 @@ def build_router(
     settings: Settings, http: httpx.AsyncClient, primary: LLMProvider | None = None
 ) -> LLMRouter:
     if primary is None:
-        primary = (
-            FakeProvider()
-            if settings.llm_provider == "fake"
-            else OllamaProvider(http, settings.ollama_base_url, settings.llm_num_ctx)
-        )
-    main = [Route(primary, settings.llm_model_main)]
-    small = [Route(primary, settings.llm_model_small)]
+        if settings.llm_provider == "fake":
+            primary = FakeProvider()
+        elif settings.llm_provider == "openai":
+            assert settings.llm_base_url and settings.llm_api_key  # enforced by Settings
+            primary = OpenAICompatibleProvider(
+                http,
+                settings.llm_base_url,
+                settings.llm_api_key.get_secret_value(),
+                json_mode=settings.llm_json_mode,
+                reasoning_effort=settings.llm_reasoning_effort,
+            )
+        else:
+            primary = OllamaProvider(http, settings.ollama_base_url, settings.llm_num_ctx)
+
+    def alternates(models: str) -> list[Route]:
+        return [Route(primary, m.strip()) for m in models.split(",") if m.strip()]
+
+    main = [
+        Route(primary, settings.llm_model_main),
+        *alternates(settings.llm_model_main_alternates),
+    ]
+    small = [
+        Route(primary, settings.llm_model_small),
+        *alternates(settings.llm_model_small_alternates),
+    ]
     if settings.fallback_enabled:
         assert settings.fallback_api_key and settings.fallback_base_url and settings.fallback_model
         fallback = OpenAICompatibleProvider(
-            http, settings.fallback_base_url, settings.fallback_api_key.get_secret_value()
+            http,
+            settings.fallback_base_url,
+            settings.fallback_api_key.get_secret_value(),
+            json_mode=settings.fallback_json_mode,
         )
         main.append(Route(fallback, settings.fallback_model))
-        small.append(Route(fallback, settings.fallback_model))
-    return LLMRouter({"main": main, "small": small}, max_retries=settings.llm_max_retries)
+        small.append(Route(fallback, settings.fallback_model_small or settings.fallback_model))
+    return LLMRouter(
+        {"main": main, "small": small},
+        max_retries=settings.llm_max_retries,
+        max_retry_after_s=settings.llm_max_retry_after_s,
+    )
 
 
 def build_telemetry(settings: Settings, http: httpx.AsyncClient) -> Telemetry:
@@ -230,6 +259,25 @@ def build_telemetry(settings: Settings, http: httpx.AsyncClient) -> Telemetry:
     )
 
 
+def build_embedder(settings: Settings, http: httpx.AsyncClient) -> Embedder:
+    if settings.embedding_provider == "fake":
+        return FakeEmbedder(settings.embedding_dim)
+    if settings.embedding_provider == "fastembed":
+        return FastEmbedEmbedder(
+            settings.fastembed_model,
+            settings.embedding_dim,
+            settings.embedding_batch_size,
+            cache_dir=settings.fastembed_cache_dir,
+        )
+    return OllamaEmbedder(
+        http,
+        settings.ollama_base_url,
+        settings.embedding_model,
+        settings.embedding_dim,
+        settings.embedding_batch_size,
+    )
+
+
 def build_services(
     settings: Settings, *, embedder: Embedder | None = None, llm_provider: LLMProvider | None = None
 ) -> Services:
@@ -237,17 +285,7 @@ def build_services(
     sessions = make_sessionmaker(engine)
     http = httpx.AsyncClient(limits=httpx.Limits(max_connections=20))
     if embedder is None:
-        embedder = (
-            FakeEmbedder(settings.embedding_dim)
-            if settings.embedding_provider == "fake"
-            else OllamaEmbedder(
-                http,
-                settings.ollama_base_url,
-                settings.embedding_model,
-                settings.embedding_dim,
-                settings.embedding_batch_size,
-            )
-        )
+        embedder = build_embedder(settings, http)
     llm = build_router(settings, http, llm_provider)
 
     def cache[V]() -> TTLCache[V]:
@@ -279,13 +317,14 @@ def build_services(
         if settings.workspace_exec_backend == "docker"
         else None,
         receipt_ttl_s=settings.workspace_receipt_ttl_s,
+        exec_enabled=settings.workspace_exec_backend != "disabled",
     )
     tools = ToolRegistry(
         [
             DocumentSearch(retriever, corpus_version=ingestion.corpus_version),
             Calculator(),
             DocumentMetadata(ingestion),
-            *workspace_tools(workspaces),
+            *workspace_tools(workspaces, exec_enabled=workspaces.exec_enabled),
         ]
     )
     harness = Harness(llm, tools, cache() if settings.cache_tool_results else None)

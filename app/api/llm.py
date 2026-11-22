@@ -79,19 +79,30 @@ async def chat(body: ChatRequest, services: ServicesDep, principal: PrincipalDep
 @router.get(
     "/models",
     response_model=list[ModelInfo],
-    summary="Configured model per role and whether Ollama has it installed",
+    summary="Configured model per role and whether it is available (Ollama: installed)",
 )
 async def models(services: ServicesDep, principal: PrincipalDep) -> list[ModelInfo]:
     s = services.settings
     installed: set[str] = set()
-    try:
-        resp = await services.http.get(f"{s.ollama_base_url}/api/tags", timeout=3)
-        resp.raise_for_status()
-        installed = {m["name"] for m in resp.json().get("models", [])}
-    except Exception:  # noqa: S110 - report as not installed rather than failing the listing
-        pass
-    roles = {"main": s.llm_model_main, "small": s.llm_model_small, "embedding": s.embedding_model}
+    if "ollama" in (s.llm_provider, s.embedding_provider):
+        try:
+            resp = await services.http.get(f"{s.ollama_base_url}/api/tags", timeout=3)
+            resp.raise_for_status()
+            installed = {m["name"] for m in resp.json().get("models", [])}
+        except Exception:  # noqa: S110 - report as not installed rather than failing the listing
+            pass
+    embedding = s.fastembed_model if s.embedding_provider == "fastembed" else s.embedding_model
+    roles = {
+        "main": (s.llm_model_main, s.llm_provider),
+        "small": (s.llm_model_small, s.llm_provider),
+        "embedding": (embedding, s.embedding_provider),
+    }
+    # Hosted and in-process models have nothing to install: "installed" means "available here".
     return [
-        ModelInfo(role=r, name=n, installed=n in installed or f"{n}:latest" in installed)
-        for r, n in roles.items()
+        ModelInfo(
+            role=r,
+            name=n,
+            installed=provider != "ollama" or n in installed or f"{n}:latest" in installed,
+        )
+        for r, (n, provider) in roles.items()
     ]

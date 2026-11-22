@@ -26,11 +26,27 @@ import type {
 
 const KEY_STORAGE = "agentops.apiKey";
 
+/** Where the API lives. Empty (the default) = same origin: the UI served by the API, or the Vite
+ * dev proxy. Set VITE_API_BASE_URL at build time when the UI is hosted on its own (e.g. Vercel). */
+export const API_BASE = joinBase(import.meta.env.VITE_API_BASE_URL ?? "");
+
+/** A public demo key baked into a showcase build (VITE_DEMO_API_KEY), so visitors can start without
+ * pasting one. It is a rate-limited tenant key, not a secret; a key the user enters wins. */
+export const DEMO_API_KEY: string = import.meta.env.VITE_DEMO_API_KEY ?? "";
+
+export function joinBase(base: string): string {
+  return base.trim().replace(/\/+$/, "");
+}
+
+export function apiUrl(path: string, base: string = API_BASE): string {
+  return `${base}${path}`;
+}
+
 export function getApiKey(): string {
   try {
-    return localStorage.getItem(KEY_STORAGE) ?? "";
+    return localStorage.getItem(KEY_STORAGE) ?? DEMO_API_KEY;
   } catch {
-    return "";
+    return DEMO_API_KEY;
   }
 }
 
@@ -83,7 +99,7 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
     init.body = JSON.stringify(body);
     (init.headers as Headers).set("Content-Type", "application/json");
   }
-  const res = await fetch(url, init);
+  const res = await fetch(apiUrl(url), init);
   if (!res.ok) throw await toError(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -192,7 +208,7 @@ export async function streamAgent(
 
   try {
     await consume(
-      await fetch("/api/v1/agent/run/stream", {
+      await fetch(apiUrl("/api/v1/agent/run/stream"), {
         method: "POST",
         headers: headers({ "Content-Type": "application/json" }),
         body: JSON.stringify({ question, mode }),
@@ -208,7 +224,7 @@ export async function streamAgent(
     await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** attempt, 8000)));
     try {
       const extra: Record<string, string> = lastId !== null ? { "Last-Event-ID": lastId } : {};
-      await consume(await fetch(`/api/v1/executions/${executionId}/stream`, { headers: headers(extra), signal }), false);
+      await consume(await fetch(apiUrl(`/api/v1/executions/${executionId}/stream`), { headers: headers(extra), signal }), false);
     } catch (err) {
       if (signal?.aborted) return;
       if (err instanceof ApiError && err.status < 500) throw err;
@@ -219,8 +235,9 @@ export async function streamAgent(
 
 /** The workspace terminal WebSocket: same executor and policy as the REST exec endpoint. */
 export function openTerminal(): WebSocket {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/api/v1/workspace/terminal`);
+  const origin = new URL(API_BASE || location.origin);
+  const proto = origin.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${origin.host}/api/v1/workspace/terminal`);
   // Browsers cannot set headers on a WebSocket, so the key goes in the first frame (protocol).
   ws.addEventListener("open", () => ws.send(JSON.stringify({ api_key: getApiKey() })));
   return ws;

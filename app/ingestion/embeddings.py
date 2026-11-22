@@ -4,10 +4,13 @@ Documents and queries are embedded differently on purpose: nomic-embed-text is t
 prefixes ("search_document: " / "search_query: ") and retrieval quality drops without them.
 """
 
+import asyncio
 import hashlib
 import math
 import re
-from typing import Protocol
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Protocol
 
 import httpx
 
@@ -88,6 +91,65 @@ class OllamaEmbedder:
 
     async def embed_query(self, text: str) -> list[float]:
         return (await self._embed_batch([self._query_prefix + text]))[0]
+
+
+class FastEmbedEmbedder:
+    """In-process CPU embeddings (ONNX via fastembed): no model server and no vendor API.
+
+    The default nomic-embed-text v1.5 is the model Ollama serves as `nomic-embed-text`, so it keeps
+    the 768-dim schema and the same task prefixes. The model loads lazily on first use (a few
+    seconds; downloaded once into cache_dir unless baked into the image) and inference runs in a
+    worker thread so it never blocks the event loop. One lock: ONNX already uses every core.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        dim: int,
+        batch_size: int = 32,
+        *,
+        cache_dir: Path | None = None,
+        model_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        self.model, self.dim, self._batch = model, dim, batch_size
+        self._cache_dir = cache_dir
+        self._factory = model_factory or self._load
+        self._impl: Any = None
+        self._lock = asyncio.Lock()
+        nomic = "nomic" in model
+        self._doc_prefix = "search_document: " if nomic else ""
+        self._query_prefix = "search_query: " if nomic else ""
+
+    def _load(self) -> Any:
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as exc:  # pragma: no cover - depends on the install
+            raise EmbeddingError(
+                "embedding_provider=fastembed needs the 'hosted' extra: uv sync --extra hosted"
+            ) from exc
+        cache = str(self._cache_dir) if self._cache_dir else None
+        return TextEmbedding(model_name=self.model, cache_dir=cache)
+
+    def _run(self, inputs: list[str]) -> list[list[float]]:
+        if self._impl is None:
+            self._impl = self._factory()
+        return [[float(x) for x in vec] for vec in self._impl.embed(inputs, batch_size=self._batch)]
+
+    async def _embed(self, inputs: list[str]) -> list[list[float]]:
+        async with self._lock:
+            try:
+                vectors = await asyncio.to_thread(self._run, inputs)
+            except EmbeddingError:
+                raise
+            except Exception as exc:
+                raise EmbeddingError("Embedding failed", detail=repr(exc)) from exc
+        return _validate(vectors, len(inputs), self.dim)
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return await self._embed([self._doc_prefix + t for t in texts]) if texts else []
+
+    async def embed_query(self, text: str) -> list[float]:
+        return (await self._embed([self._query_prefix + text]))[0]
 
 
 class FakeEmbedder:

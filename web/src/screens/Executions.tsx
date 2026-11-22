@@ -128,7 +128,7 @@ function Detail({ id }: { id: string }) {
             <Figure value={e.model_calls} label="model calls" />
             <Figure value={e.tool_calls} label="tool calls" />
             <Figure value={(e.input_tokens + e.output_tokens).toLocaleString()} label="tokens" hint={`${e.input_tokens} in · ${e.output_tokens} out`} />
-            <Figure value={e.cost_usd == null ? "n/a" : `$${Number(e.cost_usd).toFixed(2)}`} label="cost (local)" />
+            <Figure value={e.cost_usd == null ? "n/a" : `$${Number(e.cost_usd).toFixed(2)}`} label="cost" />
           </dl>
           {(e.answer || e.error_code) && (
             <div className="grid gap-x-10 gap-y-6 py-6 2xl:grid-cols-[minmax(0,1fr)_360px]">

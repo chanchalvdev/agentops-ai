@@ -1,3 +1,4 @@
+import { apiUrl, joinBase } from "./api";
 import { describe, expect, it } from "vitest";
 import { applyEdit, lineDiff, withContext } from "./diff";
 import { SseParser } from "./sse";
@@ -118,5 +119,17 @@ describe("cleanSnippet", () => {
     expect(cleanSnippet("## Availability and Recovery - Availability target: 99.95%. - Recovery Point Objective (RPO): 5 minutes")).toBe(
       "Availability and Recovery\n– Availability target: 99.95%.\n– Recovery Point Objective (RPO): 5 minutes",
     );
+  });
+});
+
+describe("API base URL", () => {
+  it("keeps same-origin paths when no base is configured", () => {
+    expect(apiUrl("/api/v1/documents", "")).toBe("/api/v1/documents");
+  });
+
+  it("prefixes a configured origin and drops trailing slashes", () => {
+    const base = joinBase(" https://api.example.io/ ");
+    expect(base).toBe("https://api.example.io");
+    expect(apiUrl("/health", base)).toBe("https://api.example.io/health");
   });
 });
