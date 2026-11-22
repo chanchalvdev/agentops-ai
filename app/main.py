@@ -10,7 +10,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
@@ -78,10 +80,21 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         title="AgentOps AI",
         version="0.1.0",
         lifespan=lifespan,
-        description="Agentic RAG platform on local models. Authenticate with X-API-Key.",
+        description="Agentic RAG platform on local or hosted models. Authenticate with X-API-Key.",
     )
     if services is not None:
         app.state.services = services
+    if settings.cors_origin_list:
+        # Sits outside the routes and the AppError/validation handlers, so error and 429
+        # responses carry CORS headers too (the browser could not read them otherwise).
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origin_list,
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["X-API-Key", "Content-Type", "Last-Event-ID", "X-Request-ID"],
+            expose_headers=["X-Request-ID", "Retry-After"],
+            max_age=600,
+        )
 
     @app.middleware("http")
     async def request_context(
@@ -147,6 +160,12 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         monitoring,
     ):
         app.include_router(module.router)
+    if settings.web_dist_dir is not None:
+        # Mounted last so every API route wins; "/" serves index.html. The UI has no client-side
+        # routes, so no SPA fallback is needed.
+        if not (settings.web_dist_dir / "index.html").is_file():
+            raise RuntimeError(f"AGENTOPS_WEB_DIST_DIR has no index.html: {settings.web_dist_dir}")
+        app.mount("/", StaticFiles(directory=settings.web_dist_dir, html=True), name="web")
     return app
 
 

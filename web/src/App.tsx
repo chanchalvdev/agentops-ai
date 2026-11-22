@@ -41,29 +41,50 @@ class ScreenBoundary extends Component<{ children: ReactNode }, { error: Error |
   }
 }
 
+const WAKE_ATTEMPTS = 20; // x WAKE_RETRY_MS: about a minute, longer than a cold start
+const WAKE_RETRY_MS = 3000;
+
 function Connection({ apiKey, onKey }: { apiKey: string; onKey: (k: string) => void }) {
   const [draft, setDraft] = useState(apiKey);
   const [state, setState] = useState<{ tenant?: string; ready?: string; error?: string }>({});
+  // A hosted API that scales to zero takes a while to start: say so instead of showing an error.
+  const [waking, setWaking] = useState(false);
 
-  const check = useCallback(async () => {
-    const next: typeof state = {};
-    try {
-      next.ready = (await api.ready()).status;
-    } catch {
-      next.ready = "unreachable";
-    }
-    if (apiKey) {
-      try {
-        next.tenant = (await api.whoami()).tenant_id;
-      } catch (e) {
-        next.error = e instanceof Error ? e.message : "invalid key";
+  const check = useCallback(
+    async (alive: () => boolean) => {
+      const slow = setTimeout(() => alive() && setWaking(true), 2500);
+      const next: typeof state = {};
+      for (let attempt = 0; attempt < WAKE_ATTEMPTS && alive(); attempt++) {
+        try {
+          next.ready = (await api.ready()).status;
+        } catch {
+          next.ready = "unreachable";
+        }
+        if (next.ready === "ready") break;
+        setWaking(true);
+        await new Promise((resolve) => setTimeout(resolve, WAKE_RETRY_MS));
       }
-    }
-    setState(next);
-  }, [apiKey]);
+      clearTimeout(slow);
+      if (!alive()) return;
+      if (apiKey) {
+        try {
+          next.tenant = (await api.whoami()).tenant_id;
+        } catch (e) {
+          next.error = e instanceof Error ? e.message : "invalid key";
+        }
+      }
+      setWaking(false);
+      setState(next);
+    },
+    [apiKey],
+  );
 
   useEffect(() => {
-    void check();
+    let alive = true;
+    void check(() => alive);
+    return () => {
+      alive = false;
+    };
   }, [check]);
 
   const ok = state.ready === "ready";
@@ -71,7 +92,7 @@ function Connection({ apiKey, onKey }: { apiKey: string; onKey: (k: string) => v
     <div className="border-t-1.5 border-ink px-4 py-4">
       <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-manila-ink">
         <span className={cx("h-2 w-2", ok ? "bg-record" : state.ready ? "bg-seal" : "bg-manila-ink/40")} aria-hidden />
-        <span>API {state.ready ?? "checking…"}</span>
+        <span>API {waking ? "waking up…" : (state.ready ?? "checking…")}</span>
         {state.tenant && <span className="ml-auto font-mono text-ink">{state.tenant}</span>}
       </div>
       <form
@@ -100,6 +121,11 @@ function Connection({ apiKey, onKey }: { apiKey: string; onKey: (k: string) => v
           Use
         </button>
       </form>
+      {waking && (
+        <p className="mt-2 text-xs font-semibold text-ink" role="status">
+          The server sleeps when idle and is starting up. This takes about 20 seconds.
+        </p>
+      )}
       {!apiKey && <p className="mt-2 text-xs font-semibold text-ink">Enter your API key to start (dev: dev-key-tenant-a).</p>}
       {state.error && <p className="mt-2 text-xs font-semibold text-seal">{state.error}</p>}
     </div>

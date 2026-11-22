@@ -46,6 +46,9 @@ jobs:
       - run: docker build -t agentops-ai:ci .
       # The image must start far enough to import the app and print the CLI help.
       - run: docker run --rm agentops-ai:ci agentops --help
+      # The hosted image (Azure Container Apps): web UI build, hosted extra, baked embedding model.
+      - run: docker build -t agentops-hosted:ci -f deploy/container/Dockerfile .
+      - run: docker run --rm agentops-hosted:ci python -c "import fastembed, app.main"
       # The workspace exec sandbox: build its image and prove the isolation (no network, no host
       # files or secrets, read-only root, non-root, no container left after a timeout).
       - run: docker build -t agentops-sandbox:1 -f docker/sandbox.Dockerfile docker

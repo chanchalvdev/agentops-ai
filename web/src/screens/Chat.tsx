@@ -109,7 +109,7 @@ function CaseRecord({ c }: { c: Case }) {
                 <Figure value={r.model_calls} label="model calls" />
                 <Figure value={r.tool_calls} label="tool calls" />
                 <Figure value={(r.usage.input_tokens + r.usage.output_tokens).toLocaleString()} label="tokens" />
-                <Figure value={r.cost_usd == null ? "n/a" : `$${Number(r.cost_usd).toFixed(2)}`} label="cost (local)" />
+                <Figure value={r.cost_usd == null ? "n/a" : `$${Number(r.cost_usd).toFixed(2)}`} label="cost" />
               </dl>
               <button
                 onClick={() => navigate("executions", r.execution_id)}
@@ -120,7 +120,7 @@ function CaseRecord({ c }: { c: Case }) {
             </>
           ) : c.running ? (
             <p className="text-lg text-ink-2">
-              The record is being signed. Local models take 20–90 s; every step appears above as it completes.
+              The record is being signed. This usually takes 15–90 s; every step appears above as it completes.
             </p>
           ) : null}
           <div className="mt-4 space-y-3">

@@ -7,11 +7,13 @@ is applied identically to every provider.
 
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -43,11 +45,48 @@ def _map_http_error(provider: str, exc: Exception) -> AppError:
     if isinstance(exc, httpx.HTTPStatusError):
         status, body = exc.response.status_code, exc.response.text[:500]
         if status == 429:
-            return RateLimitError(f"{provider} rate limited the request", detail=body)
+            return RateLimitError(
+                f"{provider} rate limited the request",
+                detail=body,
+                retry_after_s=_retry_after(exc.response.headers),
+            )
+        if status == 413:
+            # Hosted free tiers (e.g. Groq) answer 413 when one request exceeds the per-minute
+            # token quota. That is a quota, not a bad request: another route may accept it.
+            return RateLimitError(f"{provider} request exceeds its token quota", detail=body)
         if status >= 500:
             return ProviderUnavailableError(f"{provider} returned {status}", detail=body)
         return ProviderError(f"{provider} rejected the request ({status})", detail=body)
     return ProviderError(f"{provider} call failed", detail=repr(exc))
+
+
+_DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
+_UNIT_S = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
+
+
+def _retry_after(headers: httpx.Headers) -> float | None:
+    """Seconds until a rate-limited request may succeed. Standard `Retry-After` (seconds) first,
+    then Groq/OpenAI-style reset headers ("577ms", "7.66s", "1m26.4s").
+
+    Those headers describe two buckets at once: tokens per minute and requests (per day on free
+    tiers). A 429 for tokens still reports the request bucket's reset, often hours away, so the
+    request reset counts only when that bucket is actually empty; otherwise the token bucket is
+    what refused the call.
+    """
+    raw = headers.get("retry-after")
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass  # an HTTP date: not worth parsing for a hint
+    if headers.get("x-ratelimit-remaining-requests", "").strip() == "0":
+        return _duration_s(headers.get("x-ratelimit-reset-requests", ""))
+    return _duration_s(headers.get("x-ratelimit-reset-tokens", ""))
+
+
+def _duration_s(value: str) -> float | None:
+    parts = _DURATION_PART.findall(value)
+    return sum(float(n) * _UNIT_S[unit] for n, unit in parts) if parts else None
 
 
 async def _post_json(
@@ -149,13 +188,37 @@ class OllamaProvider:
         )
 
 
+_JSON_OBJECT_INSTRUCTION = (
+    "\n\nRespond with a single JSON object only, no prose or code fences. It must conform to "
+    "this JSON Schema:\n"
+)
+
+
+def provider_label(base_url: str) -> str:
+    """A short vendor name for traces and cost reports: https://api.groq.com/openai/v1 -> groq."""
+    host = urlparse(base_url).hostname or ""
+    parts = [p for p in host.split(".") if p not in ("api", "www", "com", "ai", "io", "net", "")]
+    return parts[0] if parts else "openai_compatible"
+
+
 class OpenAICompatibleProvider:
     """Any /v1/chat/completions endpoint (OpenAI, Groq, OpenRouter, vLLM, LM Studio...)."""
 
     name = "openai_compatible"
 
-    def __init__(self, client: httpx.AsyncClient, base_url: str, api_key: str) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        api_key: str,
+        *,
+        name: str | None = None,
+        json_mode: Literal["schema", "object"] = "schema",
+        reasoning_effort: str | None = None,
+    ) -> None:
         self._client, self._base, self._key = client, base_url.rstrip("/"), api_key
+        self.name = name or provider_label(base_url)
+        self._json_mode, self._reasoning_effort = json_mode, reasoning_effort
 
     @staticmethod
     def _message(m: Message) -> dict[str, Any]:
@@ -174,19 +237,32 @@ class OpenAICompatibleProvider:
         return out
 
     async def chat(self, request: LLMRequest) -> LLMResponse:
+        messages = [self._message(m) for m in request.messages]
         payload: dict[str, Any] = {
             "model": request.model,
-            "messages": [self._message(m) for m in request.messages],
+            "messages": messages,
             "temperature": request.temperature,
             "max_tokens": request.max_output_tokens,
         }
+        if self._reasoning_effort:
+            payload["reasoning_effort"] = self._reasoning_effort
         if request.tools:
             payload["tools"] = _tool_payload(request)
-        if request.json_schema:
+        if request.json_schema and self._json_mode == "schema":
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "output", "schema": request.json_schema},
             }
+        elif request.json_schema:
+            # JSON mode only guarantees *some* JSON object, so the schema goes in the prompt (the
+            # caller still validates the result). The word "JSON" in the prompt is also required
+            # by providers that enforce it for json_object mode.
+            instruction = _JSON_OBJECT_INSTRUCTION + json.dumps(request.json_schema)
+            if messages and messages[0]["role"] == "system":
+                messages[0] = {**messages[0], "content": f"{messages[0]['content']}{instruction}"}
+            else:
+                messages.insert(0, {"role": "system", "content": instruction.strip()})
+            payload["response_format"] = {"type": "json_object"}
         start = time.perf_counter()
         data = await _post_json(
             self._client,
@@ -274,11 +350,13 @@ class LLMRouter:
         routes: dict[ModelRole, list[Route]],
         max_retries: int = 1,
         retry_base_delay_s: float = 0.5,
+        max_retry_after_s: float = 0.0,
     ) -> None:
         if not all(routes.get(r) for r in ("main", "small")):
             raise ValueError("routes must define at least one route for 'main' and 'small'")
         self._routes, self._max_retries = routes, max_retries
         self._base_delay = retry_base_delay_s
+        self._max_retry_after = max_retry_after_s
 
     def model_for(self, role: ModelRole) -> str:
         return self._routes[role][0].model
@@ -299,6 +377,7 @@ class LLMRouter:
                     call,
                     max_retries=self._max_retries,
                     base_delay_s=self._base_delay,
+                    max_retry_after_s=self._max_retry_after,
                     operation=f"llm.{route.provider.name}",
                 )
             except Exception as exc:

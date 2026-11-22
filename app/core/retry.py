@@ -31,8 +31,15 @@ async def retry_async[T](
     max_delay_s: float = 8.0,
     should_retry: Callable[[BaseException], bool] = is_transient,
     operation: str = "operation",
+    max_retry_after_s: float = 0.0,
 ) -> T:
-    """Run `fn` at most `max_retries + 1` times."""
+    """Run `fn` at most `max_retries + 1` times.
+
+    When the error carries the provider's own wait hint (`retry_after_s`, from a 429) and it is at
+    most `max_retry_after_s`, wait that long instead of the jittered backoff: retrying sooner is
+    certain to fail again. A longer hint is not waited for; the error propagates so the caller
+    can fall back to another provider at once.
+    """
     attempt = 0
     while True:
         try:
@@ -40,7 +47,13 @@ async def retry_async[T](
         except Exception as exc:
             if attempt >= max_retries or not should_retry(exc):
                 raise
-            delay = backoff_delay(attempt, base_delay_s, max_delay_s)
+            hint = getattr(exc, "retry_after_s", None)
+            if hint is not None and max_retry_after_s > 0:
+                if hint > max_retry_after_s:
+                    raise
+                delay = hint + random.uniform(0, 0.5)  # noqa: S311 - jitter, not crypto
+            else:
+                delay = backoff_delay(attempt, base_delay_s, max_delay_s)
             logger.warning(
                 "retrying after transient failure",
                 extra={

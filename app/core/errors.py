@@ -83,6 +83,12 @@ class ProviderTimeoutError(ProviderError):
 class RateLimitError(ProviderError):
     code, status_code, transient = "rate_limited", 429, True
 
+    def __init__(
+        self, message: str, *, detail: str | None = None, retry_after_s: float | None = None
+    ) -> None:
+        super().__init__(message, detail=detail)
+        self.retry_after_s = retry_after_s  # the provider's own "try again in" hint, if any
+
 
 class InvalidModelOutputError(AppError):
     code, status_code = "invalid_model_output", 502

@@ -207,12 +207,16 @@ class WorkspaceExec(_WorkspaceTool[ExecInput, ExecResult]):
         return output.model_dump(include={"exit_code", "timed_out", "truncated", "duration_ms"})
 
 
-def workspace_tools(workspaces: WorkspaceManager) -> list[Tool[Any, Any]]:
-    return [
+def workspace_tools(
+    workspaces: WorkspaceManager, *, exec_enabled: bool = True
+) -> list[Tool[Any, Any]]:
+    tools: list[Tool[Any, Any]] = [
         WorkspaceList(workspaces),
         WorkspaceRead(workspaces),
         WorkspaceSearch(workspaces),
         WorkspaceWrite(workspaces),
         WorkspaceEdit(workspaces),
-        WorkspaceExec(workspaces),
     ]
+    if exec_enabled:  # otherwise the model is never offered a tool that can only fail
+        tools.append(WorkspaceExec(workspaces))
+    return tools

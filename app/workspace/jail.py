@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from app.core.errors import (
     AppError,
+    CommandNotAllowedError,
     FileTooLargeError,
     InvalidRequestError,
     NotFoundError,
@@ -469,6 +470,8 @@ class Workspace:
 
     def plan(self, argv: list[str]) -> CommandPlan:
         """Validate a command without running it (used to decide whether approval is needed)."""
+        if not self._m.exec_enabled:
+            raise CommandNotAllowedError("Command execution is disabled on this deployment")
         return plan_command(argv, self.resolve)
 
     async def stream(self, argv: list[str], actor: Actor) -> AsyncIterator[str | ExecResult]:
@@ -533,12 +536,14 @@ class WorkspaceManager:
         max_output_bytes: int = 64_000,
         sandbox: DockerSandbox | None = None,
         receipt_ttl_s: float = 7 * 86_400,
+        exec_enabled: bool = True,
     ) -> None:
         self.base = Path(os.path.realpath(root.expanduser()))
         self.audit = audit
         self.max_read_bytes, self.max_write_bytes = max_read_bytes, max_write_bytes
         self.exec_timeout_s, self.max_output_bytes = exec_timeout_s, max_output_bytes
         self.sandbox, self.receipt_ttl_s = sandbox, receipt_ttl_s
+        self.exec_enabled = exec_enabled
 
     def for_tenant(self, tenant_id: str) -> Workspace:
         return Workspace(self, tenant_id)

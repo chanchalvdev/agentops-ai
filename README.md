@@ -371,6 +371,11 @@ tok/s, qwen3:1.7b ≈ 52 tok/s; a grounded answer takes ~6–17 s. Cost for loca
 reported as `0` with `pricing_source: "local"`; hosted models without a configured price report
 `null` / `"unavailable"`, never a guess.
 
+**Hosted deployment.** The same code runs without Ollama: chat models on any OpenAI-compatible
+API (Groq, with OpenRouter as fallback), embeddings in-process with fastembed (identical
+`nomic-embed-text` vectors), Postgres on Neon, the API on Azure Container Apps (scales to zero),
+and the UI on Vercel. Setup, trade-offs and the deploy script: [docs/deployment.md](docs/deployment.md).
+
 ## Troubleshooting
 
 - `/ready` returns `ollama: unreachable` → run `ollama serve`; `missing_models` → `ollama pull <name>`.

@@ -22,12 +22,31 @@ class Settings(BaseSettings):
     api_keys: SecretStr = SecretStr("")
 
     # LLM
-    llm_provider: Literal["ollama", "fake"] = "ollama"
+    # "openai" = any OpenAI-compatible /chat/completions API (Groq, OpenRouter, Cerebras...):
+    # needs llm_base_url and llm_api_key. Prompts and retrieved document text go to that vendor.
+    llm_provider: Literal["ollama", "openai", "fake"] = "ollama"
     ollama_base_url: str = "http://localhost:11434"
+    llm_base_url: str | None = None
+    llm_api_key: SecretStr | None = None
+    # How structured output is requested from OpenAI-compatible APIs. "schema" sends a JSON-schema
+    # response_format; "object" sends json_object and puts the schema in the prompt, for models
+    # that do not support json_schema (on Groq, e.g. the Llama models). Outputs are always
+    # validated against the schema either way.
+    llm_json_mode: Literal["schema", "object"] = "schema"
+    # Passed through as reasoning_effort to OpenAI-compatible reasoning models (e.g. gpt-oss).
+    llm_reasoning_effort: Literal["low", "medium", "high"] | None = None
+    # More models on the primary provider, comma-separated, tried in order before the fallback
+    # provider when a model is rate limited or unavailable. Hosted free tiers meter each model
+    # separately (Groq: tokens per day per model), so alternates multiply the daily capacity.
+    llm_model_main_alternates: str = ""
+    llm_model_small_alternates: str = ""
     llm_model_main: str = "qwen3:8b"
     llm_model_small: str = "qwen3:1.7b"
     llm_timeout_s: float = 120.0
     llm_max_retries: int = Field(default=1, ge=0, le=3)
+    # A 429 that says "retry in N s" is waited out when N is at most this (hosted free tiers
+    # refill per-minute quotas within seconds); a longer wait falls back to the next route. 0 = off.
+    llm_max_retry_after_s: float = Field(default=20.0, ge=0, le=60)
     llm_max_output_tokens: int = 1024
     # Context window requested from Ollama. 8k fits qwen3:8b comfortably in 16 GB unified memory.
     llm_num_ctx: int = Field(default=8192, ge=2048, le=40960)
@@ -35,10 +54,16 @@ class Settings(BaseSettings):
     fallback_base_url: str | None = None
     fallback_api_key: SecretStr | None = None
     fallback_model: str | None = None
+    fallback_model_small: str | None = None  # defaults to fallback_model
+    fallback_json_mode: Literal["schema", "object"] = "object"
 
     # Embeddings. The dimension is baked into the schema; changing it needs a migration + reindex.
-    embedding_provider: Literal["ollama", "fake"] = "ollama"
+    # "fastembed" runs the model in-process on CPU (ONNX; `uv sync --extra hosted`). Its default
+    # model is the same nomic-embed-text v1.5 that Ollama serves, at the same 768 dimensions.
+    embedding_provider: Literal["ollama", "fastembed", "fake"] = "ollama"
     embedding_model: str = "nomic-embed-text"
+    fastembed_model: str = "nomic-ai/nomic-embed-text-v1.5"
+    fastembed_cache_dir: Path | None = None  # None = fastembed's default cache
     embedding_dim: int = 768
     embedding_batch_size: int = Field(default=32, ge=1, le=256)
 
@@ -120,7 +145,9 @@ class Settings(BaseSettings):
     workspace_max_output_bytes: int = Field(default=64_000, ge=1000, le=1_000_000)
     # "docker": every command runs in a throwaway container (no network, no capabilities,
     # read-only rootfs, resource limits). Build the image: docker/sandbox.Dockerfile.
-    workspace_exec_backend: Literal["host", "docker"] = "host"
+    # "disabled": no command execution at all (agent tool removed, API and terminal refuse); for
+    # hosts that cannot run a Docker sandbox, such as free PaaS tiers.
+    workspace_exec_backend: Literal["host", "docker", "disabled"] = "host"
     workspace_sandbox_image: str = "agentops-sandbox:1"
     workspace_sandbox_cpus: str = "1"
     workspace_sandbox_memory: str = "512m"
@@ -167,6 +194,19 @@ class Settings(BaseSettings):
     rate_limit_expensive_per_min: int = Field(default=6, ge=1)  # evaluations, experiments, checks
     rate_limit_workspace_per_min: int = Field(default=120, ge=1)  # workspace exec / writes
 
+    # Serve the built web UI (web/dist) from the API at "/", so one container is the whole app
+    # and the browser talks to a single origin (no CORS). None = API only (dev uses Vite).
+    web_dist_dir: Path | None = None
+    # Browser origins allowed to call the API cross-origin, comma-separated (e.g. the UI on
+    # https://agentops-ai-demo.vercel.app). Empty = same-origin only (the UI served by the API
+    # or the Vite proxy). "*" is refused: the API authenticates with a header key, and an
+    # explicit list keeps other sites from building a UI on top of a visitor's stored key.
+    cors_origins: str = ""
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+
     @model_validator(mode="after")
     def _check(self) -> "Settings":
         if self.chunk_overlap_chars >= self.chunk_size_chars:
@@ -176,6 +216,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AGENTOPS_WORKSPACE_ROOT must be a dedicated directory, not / , your home "
                 "directory, or a git repository"
+            )
+        if "*" in self.cors_origin_list:
+            raise ValueError("AGENTOPS_CORS_ORIGINS must list origins explicitly, not '*'")
+        if self.llm_provider == "openai" and not (self.llm_base_url and self.llm_api_key):
+            raise ValueError(
+                "AGENTOPS_LLM_PROVIDER=openai needs AGENTOPS_LLM_BASE_URL and AGENTOPS_LLM_API_KEY"
             )
         if self.env == "prod":
             if not self.api_keys.get_secret_value():

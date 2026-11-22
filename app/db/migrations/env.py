@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import get_settings
 from app.db.models import Base
+from app.db.session import asyncpg_url
 
 config = context.config
 target_metadata = Base.metadata
@@ -28,7 +29,7 @@ def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
 
 
 async def run_async_migrations() -> None:
-    engine = create_async_engine(database_url())
+    engine = create_async_engine(asyncpg_url(database_url()))
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await engine.dispose()

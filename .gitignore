@@ -10,3 +10,6 @@ dist/
 .DS_Store
 /workspace/
 /reports/
+.env.*
+!.env.example
+!.env.hosted.example
